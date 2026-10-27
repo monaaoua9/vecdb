@@ -88,22 +88,30 @@ which is what embedding-model output looks like:
 SQ8 keeps recall and cuts vector memory from 24.5 MiB to 6.7 MiB. Parallel build:
 about 8.7 k inserts/s on 8 threads (`ef_construction = 200`, `M = 16`).
 
-**SIFT1M** (1 000 000 × 128, L2, `M=16`, `ef_construction=200`, k=10, ground truth from the
-dataset, single query thread, same laptop). Build: 239 s on 8 threads (4.2 k inserts/s).
+**SIFT1M versus hnswlib** (1 000 000 x 128, L2, `M=16`, `ef_construction=200`, k=10,
+ground truth from the dataset, single query thread, build on 8 threads, same laptop,
+hnswlib built with `-O3 -march=native`; run one after the other, not concurrently):
 
-| ef | recall@10 | p50 | QPS |
-|---:|---:|---:|---:|
-| 16 | 0.802 | 186 µs | 5.1 k |
-| 32 | 0.903 | 221 µs | 4.2 k |
-| 64 | 0.963 | 344 µs | 2.7 k |
-| 128 | 0.989 | 590 µs | 1.6 k |
-| 256 | 0.997 | 974 µs | 1.0 k |
-| 512 | 0.999 | 1.6 ms | 610 |
+| ef | recall@10 vecdb | recall@10 hnswlib | p50 vecdb | p50 hnswlib | QPS vecdb | QPS hnswlib |
+|---:|---:|---:|---:|---:|---:|---:|
+| 16 | 0.802 | 0.800 | 186 µs | 110 µs | 5.1 k | 8.6 k |
+| 32 | 0.903 | 0.903 | 221 µs | 132 µs | 4.2 k | 7.2 k |
+| 64 | 0.963 | 0.963 | 344 µs | 180 µs | 2.7 k | 5.3 k |
+| 128 | 0.989 | 0.989 | 590 µs | 307 µs | 1.6 k | 3.3 k |
+| 256 | 0.997 | 0.997 | 974 µs | 569 µs | 1.0 k | 1.8 k |
+| 512 | 0.999 | 0.999 | 1.6 ms | 1.0 ms | 610 | 986 |
 
-Reproduce with `cargo run --release --example sift -- <dir>`. A matching driver for
-hnswlib with identical parameters is in `benches/compare/hnswlib_sift.cpp`; I have not
-published a side-by-side table because that run has not been done yet, so no claim is
-made here about how vecdb compares to hnswlib.
+Build time: vecdb 239 s (4.2 k inserts/s), hnswlib 219 s (4.6 k inserts/s).
+
+Graph quality is the same: recall matches hnswlib at every `ef`. Query speed is not:
+at equal recall hnswlib is roughly 1.6-2x faster per query here, and about 9% faster
+to build. I have not profiled where the gap comes from; likely suspects are the
+per-node adjacency `RwLock` and list copy on every hop, a function-pointer call per
+distance, and one heap allocation per node versus hnswlib's single flat level-0
+array. Treat those as hypotheses, not findings.
+
+Reproduce: `cargo run --release --example sift -- <dir>` and
+`benches/compare/hnswlib_sift.cpp` (build line is in its header).
 
 **The hard case.** With i.i.d. Gaussian noise in all 128 coordinates there is no
 structure for a graph to exploit and every point is nearly equidistant from every

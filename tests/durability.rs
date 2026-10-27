@@ -171,3 +171,55 @@ fn concurrent_writers_share_fsyncs() {
     let d = DurableIndex::open(dir.path(), c, Durability::Fsync).unwrap();
     assert_eq!(d.len() as u64, writes);
 }
+
+#[test]
+fn wal_cut_at_every_byte_recovers_a_prefix() {
+    let src = tempfile::tempdir().unwrap();
+    let data = clustered(40, 12, 7);
+    {
+        let d = DurableIndex::open(src.path(), cfg(), Durability::Flush).unwrap();
+        for (i, v) in data.iter().enumerate() {
+            d.insert(i as u64, v, Payload::new()).unwrap();
+        }
+    }
+    let bytes = std::fs::read(wal_paths(src.path()).pop().unwrap()).unwrap();
+
+    let mut prev = 0;
+    for cut in 0..=bytes.len() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("wal-000000000000.log"), &bytes[..cut]).unwrap();
+        let d = DurableIndex::open(dir.path(), cfg(), Durability::Flush).unwrap();
+        let n = d.len();
+        assert!(n >= prev, "cut {cut}: {n} < {prev}");
+        // whatever survived must be a prefix of the inserts
+        for i in 0..n {
+            assert!(d.contains(i as u64), "cut {cut}: missing {i}");
+        }
+        prev = n;
+    }
+    assert_eq!(prev, 40);
+}
+
+#[test]
+fn flipped_wal_bytes_never_panic() {
+    let src = tempfile::tempdir().unwrap();
+    let data = clustered(30, 12, 8);
+    {
+        let d = DurableIndex::open(src.path(), cfg(), Durability::Flush).unwrap();
+        for (i, v) in data.iter().enumerate() {
+            d.insert(i as u64, v, Payload::new()).unwrap();
+        }
+    }
+    let bytes = std::fs::read(wal_paths(src.path()).pop().unwrap()).unwrap();
+
+    for pos in (0..bytes.len()).step_by(3) {
+        let mut b = bytes.clone();
+        b[pos] ^= 0x55;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("wal-000000000000.log"), &b).unwrap();
+        // an error is fine, a panic or a bogus record count is not
+        if let Ok(d) = DurableIndex::open(dir.path(), cfg(), Durability::Flush) {
+            assert!(d.len() <= 30, "flip at {pos}: {} vectors", d.len());
+        }
+    }
+}

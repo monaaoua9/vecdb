@@ -214,6 +214,7 @@ impl Index {
                 }
                 if nm.deleted {
                     node.deleted.store(true, Ordering::Relaxed);
+                    idx.tombstones.fetch_add(1, Ordering::Relaxed);
                 } else {
                     ids.insert(nm.ext_id, i as u32);
                     idx.pidx.add(i as u32, &node.payload);

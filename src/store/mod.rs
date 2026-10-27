@@ -165,7 +165,7 @@ impl VectorStore {
             use std::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
             let p = w.as_ptr() as *const i8;
             let bytes = w.len() * 4;
-            for off in (0..bytes).step_by(64).take(4) {
+            for off in (0..bytes).step_by(64).take(16) {
                 // SAFETY: prefetch never faults, and `off` is inside the record anyway
                 unsafe { _mm_prefetch::<_MM_HINT_T0>(p.add(off)) };
             }

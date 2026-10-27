@@ -26,8 +26,10 @@ pub(crate) enum Gate<'a> {
 impl Gate<'_> {
     #[inline]
     fn allows(&self, idx: &Index, id: u32) -> bool {
-        if matches!(self, Gate::All) {
-            return true;
+        match self {
+            Gate::All => return true,
+            Gate::Live if idx.tombstones.load(Ordering::Relaxed) == 0 => return true,
+            _ => {}
         }
         let Some(n) = idx.nodes.get(id as usize) else {
             return false;

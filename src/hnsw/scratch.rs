@@ -23,32 +23,39 @@ impl PartialOrd for Cand {
     }
 }
 
+/// Bitset plus a list of the words touched, so a reset costs O(nodes visited)
+/// instead of O(index size) and the hot part stays small enough for L2
+/// (1M nodes = 125 KiB, against 4 MiB for a u32-per-node epoch table).
 #[derive(Default)]
 pub(crate) struct Visited {
-    marks: Vec<u32>,
-    epoch: u32,
+    bits: Vec<u64>,
+    touched: Vec<u32>,
 }
 
 impl Visited {
     pub fn reset(&mut self) {
-        self.epoch = self.epoch.wrapping_add(1);
-        if self.epoch == 0 {
-            self.marks.fill(0);
-            self.epoch = 1;
+        for &w in &self.touched {
+            self.bits[w as usize] = 0;
         }
+        self.touched.clear();
     }
 
     /// true the first time an id is seen since the last reset
     #[inline]
     pub fn visit(&mut self, id: u32) -> bool {
-        let i = id as usize;
-        if i >= self.marks.len() {
-            self.marks.resize((i + 1).next_power_of_two().max(1024), 0);
+        let w = (id >> 6) as usize;
+        if w >= self.bits.len() {
+            self.bits.resize((w + 1).next_power_of_two().max(256), 0);
         }
-        if self.marks[i] == self.epoch {
+        let m = 1u64 << (id & 63);
+        let word = self.bits[w];
+        if word & m != 0 {
             return false;
         }
-        self.marks[i] = self.epoch;
+        if word == 0 {
+            self.touched.push(w as u32);
+        }
+        self.bits[w] = word | m;
         true
     }
 }

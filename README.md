@@ -103,12 +103,34 @@ hnswlib built with `-O3 -march=native`; run one after the other, not concurrentl
 
 Build time: vecdb 239 s (4.2 k inserts/s), hnswlib 219 s (4.6 k inserts/s).
 
-Graph quality is the same: recall matches hnswlib at every `ef`. Query speed is not:
-at equal recall hnswlib is roughly 1.6-2x faster per query here, and about 9% faster
-to build. I have not profiled where the gap comes from; likely suspects are the
-per-node adjacency `RwLock` and list copy on every hop, a function-pointer call per
-distance, and one heap allocation per node versus hnswlib's single flat level-0
-array. Treat those as hypotheses, not findings.
+Graph quality is the same: recall matches hnswlib at every `ef`.
+
+Read the speed columns with care. The hnswlib numbers are from a single pass over the
+queries; vecdb's were also a single pass in this table. When I later re-ran vecdb with
+the fastest of 5 passes, ef=64 came out at 201-223 µs (4.3 k QPS) against 344 µs here,
+so on this laptop run-to-run variation is large enough (roughly +-10% up to 40%) to
+swallow most of the per-query gap shown above. I could not re-run hnswlib with the same
+best-of-N method, so **the true speed gap is not established**; the table above is an
+upper bound, not a measurement of it.
+
+Where the time goes (vecdb, ef=64, about 1 100 distance evaluations per query): the
+distance arithmetic is about 11% of the cycles. Most of the rest is spent fetching the
+neighbour list and the vectors, not computing. Prefetching matters (310 µs without,
+about 225 µs with). A smaller visited-set and skipping a per-candidate node lookup made
+no measurable difference.
+
+**SQ8 on SIFT1M** (same protocol, best of 5 passes; snapshot 212 MB instead of 585 MB):
+
+| ef | recall@10 | p50 | QPS |
+|---:|---:|---:|---:|
+| 16 | 0.797 | 83 µs | 11.6 k |
+| 64 | 0.958 | 236 µs | 4.2 k |
+| 128 | 0.982 | 316 µs | 3.1 k |
+| 512 | 0.992 | 954 µs | 1.1 k |
+
+SQ8 cuts memory by about 2.7x on disk here and costs about 0.5 points of recall at
+ef=64, but recall plateaus near 0.992 (the quantization error), and queries are not
+faster than f32. That rules out "vector bytes fetched" as the main cost per query.
 
 Reproduce: `cargo run --release --example sift -- <dir>` and
 `benches/compare/hnswlib_sift.cpp` (build line is in its header).

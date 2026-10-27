@@ -90,6 +90,8 @@ pub struct Index {
     pub(crate) entry: RwLock<Option<(u32, u8)>>,
     pub(crate) next_id: AtomicUsize,
     pub(crate) live: AtomicUsize,
+    // lets unfiltered searches skip the per-candidate node lookup while nothing is deleted
+    pub(crate) tombstones: AtomicUsize,
     pub(crate) pidx: PayloadIndex,
     // writers (insert/delete) hold this shared, save() takes it exclusive
     pub(crate) gate: RwLock<()>,
@@ -114,6 +116,7 @@ impl Index {
             entry: RwLock::new(None),
             next_id: AtomicUsize::new(0),
             live: AtomicUsize::new(0),
+            tombstones: AtomicUsize::new(0),
             pidx: PayloadIndex::default(),
             gate: RwLock::new(()),
             rng: AtomicU64::new(cfg.seed),
@@ -164,6 +167,7 @@ impl Index {
         if !node.deleted.swap(true, Ordering::AcqRel) {
             self.pidx.remove(id, &node.payload);
             self.live.fetch_sub(1, Ordering::Relaxed);
+            self.tombstones.fetch_add(1, Ordering::Relaxed);
         }
         Ok(())
     }

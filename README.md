@@ -105,32 +105,39 @@ Build time: vecdb 239 s (4.2 k inserts/s), hnswlib 219 s (4.6 k inserts/s).
 
 Graph quality is the same: recall matches hnswlib at every `ef`.
 
-Read the speed columns with care. The hnswlib numbers are from a single pass over the
-queries; vecdb's were also a single pass in this table. When I later re-ran vecdb with
-the fastest of 5 passes, ef=64 came out at 201-223 µs (4.3 k QPS) against 344 µs here,
-so on this laptop run-to-run variation is large enough (roughly +-10% up to 40%) to
-swallow most of the per-query gap shown above. I could not re-run hnswlib with the same
-best-of-N method, so **the true speed gap is not established**; the table above is an
-upper bound, not a measurement of it.
+How to read the speed columns. In the table above each program built the index and
+then queried it in the same process, one pass over the queries. That is a fair
+like-for-like setup, but this laptop makes it noisy, and I found a second effect that
+matters more: **a vecdb index queried right after an in-process parallel build is
+noticeably slower than the same index after `save` + `open`** (ef=64: 250-340 µs
+right after the build, 190-220 µs reloaded from the snapshot, several runs each). My
+guess is allocation locality (reloading allocates nodes in id order), but I have not
+verified that. I could not re-run hnswlib with the best-of-N / reloaded protocol, so I
+make no claim about the size of the speed gap beyond "hnswlib was faster in this run".
 
-Where the time goes (vecdb, ef=64, about 1 100 distance evaluations per query): the
-distance arithmetic is about 11% of the cycles. Most of the rest is spent fetching the
-neighbour list and the vectors, not computing. Prefetching matters (310 µs without,
-about 225 µs with). A smaller visited-set and skipping a per-candidate node lookup made
-no measurable difference.
+vecdb reloaded from a snapshot, fastest of 5 passes, same SIFT1M protocol:
 
-**SQ8 on SIFT1M** (same protocol, best of 5 passes; snapshot 212 MB instead of 585 MB):
+| ef | recall@10 (f32) | p50 | QPS | recall@10 (SQ8) | p50 | QPS |
+|---:|---:|---:|---:|---:|---:|---:|
+| 16 | 0.801 | 73 µs | 12.9 k | 0.797 | 131 µs | 5.5 k |
+| 32 | 0.903 | 119 µs | 8.1 k | 0.899 | 210 µs | 4.4 k |
+| 64 | 0.963 | 210 µs | 4.7 k | 0.958 | 296 µs | 3.3 k |
+| 128 | 0.989 | 389 µs | 2.5 k | 0.982 | 358 µs | 2.5 k |
+| 256 | 0.997 | 750 µs | 1.3 k | 0.990 | 766 µs | 1.2 k |
+| 512 | 0.999 | 1.4 ms | 685 | 0.992 | 1.4 ms | 685 |
 
-| ef | recall@10 | p50 | QPS |
-|---:|---:|---:|---:|
-| 16 | 0.797 | 83 µs | 11.6 k |
-| 64 | 0.958 | 236 µs | 4.2 k |
-| 128 | 0.982 | 316 µs | 3.1 k |
-| 512 | 0.992 | 954 µs | 1.1 k |
+SQ8 shrinks the snapshot from 585 MB to 212 MB (about 2.7x), costs roughly half a point
+of recall at ef=64, and on this CPU is *slower* per query at low `ef` (the AVX2
+`u8 -> f32` widening plus the extra per-query terms cost more than the saved memory
+traffic) and caps out near 0.992 recall. Use it to fit more vectors in RAM, not for speed.
 
-SQ8 cuts memory by about 2.7x on disk here and costs about 0.5 points of recall at
-ef=64, but recall plateaus near 0.992 (the quantization error), and queries are not
-faster than f32. That rules out "vector bytes fetched" as the main cost per query.
+Where the time goes (f32, ef=64, about 1 100 distance evaluations per query):
+distance arithmetic is about 11% of the cycles; the rest is mostly fetching neighbour
+lists and vectors. Prefetching vectors matters (310 µs without, about 225 µs with).
+Things that made no measurable difference: a smaller visited-set, skipping a
+per-candidate node lookup when nothing is deleted, and a flat layer-0 neighbour array
+(tried and reverted; the apparent gain in one A/B run came from comparing a
+freshly-built index against a reloaded one).
 
 Reproduce: `cargo run --release --example sift -- <dir>` and
 `benches/compare/hnswlib_sift.cpp` (build line is in its header).

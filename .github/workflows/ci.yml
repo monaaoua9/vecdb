@@ -1,0 +1,53 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: protoc (linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: protoc (mac)
+        if: startsWith(matrix.os, 'macos')
+        run: brew install protobuf
+      - name: protoc (windows)
+        if: startsWith(matrix.os, 'windows')
+        run: choco install protoc -y
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - run: cargo test --no-default-features
+
+  kernels:
+    name: simd kernels per ISA
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: show cpu flags
+        run: grep -o -w -E 'avx2|avx512f|fma' /proc/cpuinfo | sort -u
+      - name: force each kernel in turn
+        run: |
+          for k in scalar avx2 avx512; do
+            echo "== VECDB_SIMD=$k"
+            VECDB_SIMD=$k cargo test --test simd --test recall -- --nocapture
+          done

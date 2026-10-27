@@ -1,0 +1,83 @@
+[package]
+name = "vecdb"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+description = "Embedded vector database: HNSW graph index, SIMD distance kernels, SQ8 quantization, mmap snapshots, gRPC front-end"
+license = "MIT"
+readme = "README.md"
+keywords = ["vector-database", "hnsw", "ann", "simd", "embeddings"]
+categories = ["database-implementations", "algorithms"]
+
+[features]
+default = ["server"]
+server = [
+    "dep:tonic",
+    "dep:tonic-prost",
+    "dep:prost",
+    "dep:tokio",
+    "dep:tokio-stream",
+    "dep:tonic-health",
+    "dep:clap",
+    "dep:tracing-subscriber",
+    "dep:tonic-prost-build",
+]
+
+[dependencies]
+bytemuck = { version = "1.25", features = ["derive"] }
+crc32fast = "1.5"
+memmap2 = "0.9"
+parking_lot = "0.13"
+postcard = { version = "1.1", features = ["use-std"] }
+roaring = "0.11"
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2"
+tracing = "0.1"
+
+tonic = { version = "0.14", optional = true }
+tonic-prost = { version = "0.14", optional = true }
+prost = { version = "0.14", optional = true }
+tokio = { version = "1", optional = true, features = ["rt-multi-thread", "macros", "signal"] }
+tokio-stream = { version = "0.1", optional = true }
+tonic-health = { version = "0.14", optional = true }
+clap = { version = "4", optional = true, features = ["derive"] }
+tracing-subscriber = { version = "0.3", optional = true, features = ["env-filter"] }
+
+[build-dependencies]
+tonic-prost-build = { version = "0.14", optional = true }
+
+[dev-dependencies]
+criterion = "0.8"
+tempfile = "3"
+
+[[bin]]
+name = "vecdb-server"
+path = "src/bin/vecdb-server.rs"
+required-features = ["server"]
+
+[[example]]
+name = "client"
+required-features = ["server"]
+
+[[bench]]
+name = "distance"
+harness = false
+
+[[bench]]
+name = "index"
+harness = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = 1
+
+[profile.bench]
+inherits = "release"
+
+[profile.test]
+opt-level = 3
+
+[profile.dev]
+opt-level = 1

@@ -1,0 +1,139 @@
+syntax = "proto3";
+
+package vecdb.v1;
+
+service VectorDb {
+  rpc Insert(InsertRequest) returns (InsertResponse);
+  // client-streaming bulk load; one response after the stream closes
+  rpc InsertStream(stream InsertRequest) returns (InsertStreamResponse);
+  rpc Search(SearchRequest) returns (SearchResponse);
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  rpc Stats(StatsRequest) returns (StatsResponse);
+  // write a snapshot into the server's data directory
+  rpc Snapshot(SnapshotRequest) returns (SnapshotResponse);
+}
+
+message Value {
+  oneof kind {
+    bool bool_value = 1;
+    int64 int_value = 2;
+    double float_value = 3;
+    string string_value = 4;
+  }
+}
+
+message Payload {
+  map<string, Value> fields = 1;
+}
+
+message Filter {
+  oneof kind {
+    FieldMatch match = 1;
+    FieldMatchAny match_any = 2;
+    FieldRange range = 3;
+    FilterList and = 4;
+    FilterList or = 5;
+    Filter not = 6;
+  }
+}
+
+message FieldMatch {
+  string field = 1;
+  Value value = 2;
+}
+
+message FieldMatchAny {
+  string field = 1;
+  repeated Value values = 2;
+}
+
+// inclusive bounds, either side may be left open
+message FieldRange {
+  string field = 1;
+  optional double min = 2;
+  optional double max = 3;
+}
+
+message FilterList {
+  repeated Filter filters = 1;
+}
+
+enum FilterStrategy {
+  FILTER_STRATEGY_AUTO = 0;
+  FILTER_STRATEGY_PRE = 1;
+  FILTER_STRATEGY_POST = 2;
+}
+
+message InsertRequest {
+  uint64 id = 1;
+  repeated float vector = 2;
+  Payload payload = 3;
+}
+
+message InsertResponse {}
+
+message InsertStreamResponse {
+  uint64 inserted = 1;
+}
+
+message SearchRequest {
+  repeated float vector = 1;
+  uint32 k = 2;
+  // beam width, 0 = server default
+  uint32 ef = 3;
+  optional Filter filter = 4;
+  FilterStrategy strategy = 5;
+  bool with_payload = 6;
+}
+
+message Hit {
+  uint64 id = 1;
+  // lower is closer: squared L2, 1 - cosine, or negative inner product
+  float distance = 2;
+  Payload payload = 3;
+}
+
+message SearchResponse {
+  repeated Hit hits = 1;
+  uint64 took_micros = 2;
+}
+
+message GetRequest {
+  uint64 id = 1;
+}
+
+message GetResponse {
+  uint64 id = 1;
+  repeated float vector = 2;
+  Payload payload = 3;
+}
+
+message DeleteRequest {
+  uint64 id = 1;
+}
+
+message DeleteResponse {}
+
+message StatsRequest {}
+
+message StatsResponse {
+  uint64 live = 1;
+  uint64 deleted = 2;
+  uint64 capacity = 3;
+  uint32 max_level = 4;
+  uint64 layer0_edges = 5;
+  uint32 dim = 6;
+  string metric = 7;
+  string quantization = 8;
+  string simd_kernel = 9;
+  uint64 heap_vector_bytes = 10;
+  uint64 mapped_bytes = 11;
+}
+
+message SnapshotRequest {}
+
+message SnapshotResponse {
+  string path = 1;
+  uint64 vectors = 2;
+}

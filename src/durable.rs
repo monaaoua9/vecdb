@@ -3,6 +3,7 @@
 //! Layout of the data directory:
 //!   snapshot-<gen>.vdb   full state as of the moment generation <gen> was cut
 //!   wal-<gen>.log        every mutation applied after that snapshot
+//!   codebook.bin         pq only: trained once, before the first insert
 //!
 //! Recovery = open the newest snapshot, replay every wal with gen >= snapshot gen.
 //! Replay is idempotent (duplicate inserts / missing deletes are skipped), which
@@ -22,7 +23,11 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::filter::Payload;
 use crate::hnsw::{Index, Item};
+use crate::pq::Codebook;
+use crate::quant::Quantization;
 use crate::snapshots;
+
+const CODEBOOK: &str = "codebook.bin";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Durability {
@@ -231,6 +236,29 @@ impl DurableIndex {
         }
     }
 
+    /// First step for a PQ index: trains the codebook and stores it in `dir`, so that
+    /// `open` (and wal replay after a crash) can rebuild the index before any snapshot exists.
+    pub fn train_pq(dir: impl AsRef<Path>, cfg: &Config, sample: &[f32], threads: usize) -> Result<()> {
+        let Quantization::Pq { m } = cfg.quantization else {
+            return Err(Error::InvalidConfig("train_pq needs Quantization::Pq".into()));
+        };
+        cfg.validate()?;
+        let dir = dir.as_ref();
+        std::fs::create_dir_all(dir)?;
+        let path = dir.join(CODEBOOK);
+        if path.exists() {
+            return Err(Error::InvalidConfig("codebook already exists in this directory".into()));
+        }
+        let book = Index::train_codebook(cfg, m, sample, threads)?;
+        let tmp = path.with_extension("tmp");
+        let mut f = File::create(&tmp)?;
+        f.write_all(&book.to_bytes())?;
+        f.sync_all()?;
+        drop(f);
+        std::fs::rename(&tmp, &path)?;
+        Ok(())
+    }
+
     /// Recovers from `dir` (newest snapshot + wal replay), or starts empty with `cfg`.
     pub fn open(dir: impl AsRef<Path>, cfg: Config, mode: Durability) -> Result<Self> {
         let dir = dir.as_ref();
@@ -238,6 +266,14 @@ impl DurableIndex {
 
         let (index, snap_gen) = match snapshots::latest(dir) {
             Some((g, p)) => (Index::open(&p)?, g),
+            None if matches!(cfg.quantization, Quantization::Pq { .. }) => {
+                let raw = std::fs::read(dir.join(CODEBOOK)).map_err(|_| {
+                    Error::InvalidConfig(
+                        "pq index: call DurableIndex::train_pq on this directory first".into(),
+                    )
+                })?;
+                (Index::with_codebook(cfg, Codebook::from_bytes(&raw)?)?, 0)
+            }
             None => (Index::new(cfg)?, 0),
         };
 

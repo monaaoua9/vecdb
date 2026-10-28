@@ -23,7 +23,7 @@ impl Index {
         let mut cfg = self.cfg.clone();
         cfg.max_elements = cfg.max_elements.max(self.len());
         let out = match self.store.codebook() {
-            Some(b) => Index::assemble(cfg, None, Some(b.clone())),
+            Some(b) => Index::assemble(cfg, None, Some(b.clone()), None),
             None => Index::new(cfg)?,
         };
 
@@ -35,7 +35,7 @@ impl Index {
             if node.deleted.load(Ordering::Relaxed) {
                 continue;
             }
-            let Some(v) = self.store.decode(i, &mut buf) else { continue };
+            let Some(v) = self.full.as_ref().unwrap_or(&self.store).decode(i, &mut buf) else { continue };
             chunk.push(Item { id: node.ext_id, vector: v.to_vec(), payload: node.payload.clone() });
             if chunk.len() == CHUNK {
                 out.insert_bulk(&chunk, threads)?;

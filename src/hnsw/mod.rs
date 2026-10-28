@@ -88,6 +88,8 @@ pub struct Index {
     pub(crate) cfg: Config,
     pub(crate) space: Space,
     pub(crate) store: VectorStore,
+    // full-precision copy, only with cfg.rerank
+    pub(crate) full: Option<VectorStore>,
     pub(crate) nodes: AppendVec<Node>,
     pub(crate) ids: RwLock<HashMap<u64, u32>>,
     pub(crate) entry: RwLock<Option<(u32, u8)>>,
@@ -108,7 +110,7 @@ impl Index {
         if matches!(cfg.quantization, Quantization::Pq { .. }) {
             return Err(Error::InvalidConfig("pq needs a trained codebook, use Index::new_pq".into()));
         }
-        Ok(Self::assemble(cfg, None, None))
+        Ok(Self::assemble(cfg, None, None, None))
     }
 
     /// Trains the codebook on `sample` (row-major, `dim` floats per row, at least 256 rows;
@@ -119,21 +121,44 @@ impl Index {
         let Quantization::Pq { m } = cfg.quantization else {
             return Err(Error::InvalidConfig("new_pq needs Quantization::Pq".into()));
         };
+        let book = Self::train_codebook(&cfg, m, sample, threads)?;
+        Ok(Self::assemble(cfg, None, Some(Arc::new(book)), None))
+    }
+
+    pub(crate) fn train_codebook(cfg: &Config, m: u16, sample: &[f32], threads: usize) -> Result<Codebook> {
         let plain = Space::new(cfg.metric, cfg.dim, Quantization::None);
         let mut data = Vec::with_capacity(sample.len());
         for row in sample.chunks_exact(cfg.dim) {
             data.extend(plain.sanitize(row)?);
         }
-        let book = Codebook::train(cfg.dim, m as usize, &data, 12, cfg.seed, threads)?;
-        Ok(Self::assemble(cfg, None, Some(Arc::new(book))))
+        Codebook::train(cfg.dim, m as usize, &data, 12, cfg.seed, threads)
     }
 
-    pub(crate) fn assemble(cfg: Config, base: Option<Segment>, book: Option<Arc<Codebook>>) -> Index {
+    /// empty index around an already trained codebook
+    pub(crate) fn with_codebook(cfg: Config, book: Codebook) -> Result<Index> {
+        cfg.validate()?;
+        Ok(Self::assemble(cfg, None, Some(Arc::new(book)), None))
+    }
+
+    pub fn codebook(&self) -> Option<&Codebook> {
+        self.store.codebook().map(|b| b.as_ref())
+    }
+
+    pub(crate) fn assemble(
+        cfg: Config,
+        base: Option<Segment>,
+        book: Option<Arc<Codebook>>,
+        full_base: Option<Segment>,
+    ) -> Index {
         let space = Space::new(cfg.metric, cfg.dim, cfg.quantization);
         let store = VectorStore::new(cfg.dim, cfg.quantization, cfg.max_elements, base, book);
+        let full = cfg
+            .rerank
+            .then(|| VectorStore::new(cfg.dim, Quantization::None, cfg.max_elements, full_base, None));
         Index {
             space,
             store,
+            full,
             nodes: AppendVec::with_capacity(cfg.max_elements),
             ids: RwLock::new(HashMap::new()),
             entry: RwLock::new(None),
@@ -173,7 +198,7 @@ impl Index {
     pub fn get(&self, ext_id: u64) -> Option<Record> {
         let (id, n) = self.lookup(ext_id)?;
         let mut buf = Vec::new();
-        let v = self.store.decode(id as usize, &mut buf)?.to_vec();
+        let v = self.full.as_ref().unwrap_or(&self.store).decode(id as usize, &mut buf)?.to_vec();
         Some(Record { id: ext_id, vector: v, payload: n.payload.clone() })
     }
 
@@ -211,8 +236,8 @@ impl Index {
             max_level: self.entry.read().map_or(0, |(_, l)| l as usize),
             layer0_edges: edges,
             kernel: self.space.kernel_name(),
-            heap_vector_bytes: self.store.heap_bytes(),
-            mapped_bytes: self.store.mapped_bytes(),
+            heap_vector_bytes: self.store.heap_bytes() + self.full.as_ref().map_or(0, |f| f.heap_bytes()),
+            mapped_bytes: self.store.mapped_bytes() + self.full.as_ref().map_or(0, |f| f.mapped_bytes()),
         }
     }
 

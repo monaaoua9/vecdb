@@ -56,10 +56,21 @@ impl Index {
             return Ok(vec![]);
         }
         let ef = p.ef.unwrap_or(self.cfg.ef_search).max(p.k);
-        let found = match &p.filter {
-            None => self.ann(&q, p.k, ef, &Gate::Live),
-            Some(f) => self.filtered(&q, p.k, ef, f, p.strategy),
+        // with a rerank store the whole beam is re-scored, not just the top k
+        let want = if self.full.is_some() { ef } else { p.k };
+        let mut found = match &p.filter {
+            None => self.ann(&q, want, ef, &Gate::Live),
+            Some(f) => self.filtered(&q, want, ef, f, p.strategy),
         };
+        if let Some(full) = &self.full {
+            for c in &mut found {
+                if let Some(v) = full.get(c.id as usize) {
+                    c.dist = self.space.dist(&q, v);
+                }
+            }
+            found.sort_unstable();
+            found.truncate(p.k);
+        }
         Ok(self.to_hits(found))
     }
 
@@ -168,7 +179,7 @@ impl Index {
             if n.deleted.load(Ordering::Relaxed) || pred.is_some_and(|f| !f.matches(&n.payload)) {
                 continue;
             }
-            let Some(v) = self.store.get(id as usize) else {
+            let Some(v) = self.full.as_ref().unwrap_or(&self.store).get(id as usize) else {
                 continue;
             };
             let d = self.space.dist(q, v);

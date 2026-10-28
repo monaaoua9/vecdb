@@ -14,6 +14,9 @@ impl Index {
         let id = self.reserve(ext_id)?;
         let level = self.random_level();
         self.store.put(id as usize, &vec);
+        if let Some(f) = &self.full {
+            f.put(id as usize, &vec);
+        }
         self.nodes.set(id as usize, Node::new(ext_id, level, payload, self.cfg.m));
 
         self.link(id, level, &vec);

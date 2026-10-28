@@ -18,6 +18,8 @@ enum MetricArg {
 enum QuantArg {
     None,
     Sq8,
+    /// needs a codebook in --data-dir, see DurableIndex::train_pq
+    Pq,
 }
 
 #[derive(Parser)]
@@ -37,6 +39,12 @@ struct Args {
     metric: MetricArg,
     #[arg(long, value_enum, default_value = "none")]
     quantization: QuantArg,
+    /// subspaces (bytes per vector) when --quantization pq
+    #[arg(long, default_value_t = 16)]
+    pq_m: u16,
+    /// keep full-precision vectors and re-score the final candidates with them
+    #[arg(long)]
+    rerank: bool,
     #[arg(long, default_value_t = 16)]
     m: usize,
     #[arg(long, default_value_t = 200)]
@@ -71,7 +79,9 @@ fn build_config(a: &Args) -> Config {
     cfg.quantization = match a.quantization {
         QuantArg::None => Quantization::None,
         QuantArg::Sq8 => Quantization::Sq8,
+        QuantArg::Pq => Quantization::Pq { m: a.pq_m },
     };
+    cfg.rerank = a.rerank;
     cfg.m = a.m;
     cfg.ef_construction = a.ef_construction;
     cfg.ef_search = a.ef_search;

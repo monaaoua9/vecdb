@@ -65,6 +65,7 @@ fn main() {
             if let Some(m) = pq_m {
                 cfg.quantization = vecdb::Quantization::Pq { m };
             }
+            cfg.rerank = std::env::var_os("SIFT_RERANK").is_some();
             cfg.m = 16;
             cfg.ef_construction = 200;
             let idx = match pq_m {

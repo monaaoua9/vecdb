@@ -223,3 +223,40 @@ fn flipped_wal_bytes_never_panic() {
         }
     }
 }
+
+#[test]
+fn pq_index_recovers_from_wal_and_snapshot() {
+    use vecdb::Quantization;
+    let dir = tempfile::tempdir().unwrap();
+    let data = clustered(600, 12, 21);
+    let mut c = cfg();
+    c.quantization = Quantization::Pq { m: 4 };
+    let sample: Vec<f32> = data.iter().flatten().copied().collect();
+
+    // no codebook yet
+    assert!(DurableIndex::open(dir.path(), c.clone(), Durability::Flush).is_err());
+    DurableIndex::train_pq(dir.path(), &c, &sample, 2).unwrap();
+    assert!(DurableIndex::train_pq(dir.path(), &c, &sample, 2).is_err());
+
+    {
+        let d = DurableIndex::open(dir.path(), c.clone(), Durability::Flush).unwrap();
+        for (i, v) in data[..300].iter().enumerate() {
+            d.insert(i as u64, v, Payload::new()).unwrap();
+        }
+        // crash with only the wal on disk
+    }
+    let first = {
+        let d = DurableIndex::open(dir.path(), c.clone(), Durability::Flush).unwrap();
+        assert_eq!(d.len(), 300);
+        let before = d.search(&data[10], 3).unwrap();
+        d.checkpoint().unwrap();
+        for (i, v) in data.iter().enumerate().skip(300) {
+            d.insert(i as u64, v, Payload::new()).unwrap();
+        }
+        before
+    };
+    let d = DurableIndex::open(dir.path(), c, Durability::Flush).unwrap();
+    assert_eq!(d.len(), 600);
+    assert!(d.contains(599));
+    assert_eq!(first.len(), 3);
+}

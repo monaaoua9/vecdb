@@ -121,3 +121,61 @@ fn records_are_about_a_thirty_second() {
     // 8 code bytes per vector against 128 for f32
     assert_eq!(s.heap_vector_bytes, 1024 * 8);
 }
+
+fn rerank_cfg() -> Config {
+    let mut c = cfg(Metric::L2);
+    c.rerank = true;
+    c
+}
+
+fn build_rerank(data: &[Vec<f32>]) -> Index {
+    let idx = Index::new_pq(rerank_cfg(), &flat(data), 2).unwrap();
+    let items: Vec<Item> = data
+        .iter()
+        .enumerate()
+        .map(|(i, v)| Item { id: i as u64, vector: v.clone(), payload: Payload::new() })
+        .collect();
+    idx.insert_bulk(&items, 4).unwrap();
+    idx
+}
+
+#[test]
+fn rerank_lifts_recall_and_gives_exact_distances() {
+    let data = clustered(3000, DIM, 11);
+    let qs = clustered(60, DIM, 97);
+    let plain = recall(&build(Metric::L2, &data), &data, &qs);
+    let idx = build_rerank(&data);
+    let r = recall(&idx, &data, &qs);
+    assert!(r > plain + 0.05, "rerank {r} vs plain {plain}");
+
+    // the reported distance is the true one, not the lookup-table estimate
+    let h = idx.search(&data[5], 1).unwrap();
+    assert_eq!(h[0].id, 5);
+    assert!(h[0].distance < 1e-6);
+    assert_eq!(idx.get(5).unwrap().vector, data[5]);
+}
+
+#[test]
+fn rerank_survives_snapshot_and_compaction() {
+    let data = clustered(1500, DIM, 12);
+    let idx = build_rerank(&data);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rr.vdb");
+    idx.save(&path).unwrap();
+    let back = Index::open(&path).unwrap();
+    assert_eq!(back.get(700).unwrap().vector, data[700]);
+    assert_eq!(back.search(&data[700], 1).unwrap()[0].id, 700);
+
+    for i in 0..200 {
+        back.delete(i).unwrap();
+    }
+    let c = back.compacted(2).unwrap();
+    assert_eq!(c.get(900).unwrap().vector, data[900]);
+}
+
+#[test]
+fn rerank_needs_quantization() {
+    let mut c = Config::new(DIM, Metric::L2);
+    c.rerank = true;
+    assert!(Index::new(c).is_err());
+}

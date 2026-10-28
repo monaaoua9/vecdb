@@ -115,6 +115,35 @@ impl Codebook {
         Ok(Codebook { dim, m, dsub: dim / m, cents })
     }
 
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut b = Vec::with_capacity(16 + self.cents.len() * 4 + 4);
+        b.extend_from_slice(b"VECDBPQ1");
+        b.extend_from_slice(&(self.dim as u32).to_le_bytes());
+        b.extend_from_slice(&(self.m as u32).to_le_bytes());
+        b.extend_from_slice(bytemuck::cast_slice(&self.cents));
+        let crc = crc32fast::hash(&b);
+        b.extend_from_slice(&crc.to_le_bytes());
+        b
+    }
+
+    pub fn from_bytes(b: &[u8]) -> Result<Codebook> {
+        let bad = || Error::Corrupt("pq codebook file is damaged".into());
+        if b.len() < 20 || &b[..8] != b"VECDBPQ1" {
+            return Err(bad());
+        }
+        let (body, crc) = b.split_at(b.len() - 4);
+        if crc32fast::hash(body) != u32::from_le_bytes(crc.try_into().unwrap()) {
+            return Err(bad());
+        }
+        let dim = u32::from_le_bytes(body[8..12].try_into().unwrap()) as usize;
+        let m = u32::from_le_bytes(body[12..16].try_into().unwrap()) as usize;
+        if !body[16..].len().is_multiple_of(4) {
+            return Err(bad());
+        }
+        let cents: Vec<f32> = body[16..].as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
+        Codebook::from_parts(dim, m, cents)
+    }
+
     pub fn centroids(&self) -> &[f32] {
         &self.cents
     }
@@ -205,6 +234,16 @@ mod tests {
             let adc: f32 = (0..m).map(|j| t[j * K + codes[j] as usize]).sum();
             assert!((exact - adc).abs() < 1e-4);
         }
+    }
+
+    #[test]
+    fn bytes_roundtrip_and_detect_damage() {
+        let b = Codebook::train(8, 2, &data(600, 8), 2, 1, 1).unwrap();
+        let mut raw = b.to_bytes();
+        let back = Codebook::from_bytes(&raw).unwrap();
+        assert_eq!(back.centroids(), b.centroids());
+        raw[40] ^= 1;
+        assert!(Codebook::from_bytes(&raw).is_err());
     }
 
     #[test]

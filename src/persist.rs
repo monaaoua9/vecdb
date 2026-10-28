@@ -23,9 +23,9 @@ use crate::quant::Quantization;
 use crate::store::Segment;
 
 const MAGIC: &[u8; 8] = b"VECDBHNS";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 const HEADER_SIZE: usize = 4096;
-const HEADER_USED: usize = 72;
+const HEADER_USED: usize = 84;
 
 #[derive(Serialize, Deserialize)]
 struct NodeMeta {
@@ -49,6 +49,7 @@ struct Header {
     stride_words: u64,
     vec_off: u64,
     vec_len: u64,
+    full_len: u64,
     meta_off: u64,
     meta_len: u64,
     meta_crc: u32,
@@ -66,6 +67,7 @@ impl Header {
         b[48..56].copy_from_slice(&self.meta_off.to_le_bytes());
         b[56..64].copy_from_slice(&self.meta_len.to_le_bytes());
         b[64..68].copy_from_slice(&self.meta_crc.to_le_bytes());
+        b[68..76].copy_from_slice(&self.full_len.to_le_bytes());
         let crc = crc32fast::hash(&b[16..HEADER_USED]);
         b[12..16].copy_from_slice(&crc.to_le_bytes());
         b
@@ -88,6 +90,7 @@ impl Header {
             stride_words: u64_at(24),
             vec_off: u64_at(32),
             vec_len: u64_at(40),
+            full_len: u64_at(68),
             meta_off: u64_at(48),
             meta_len: u64_at(56),
             meta_crc: u32_at(64),
@@ -136,6 +139,16 @@ impl Index {
             w.write_all(bytemuck::cast_slice(words))?;
         }
         let vec_len = (count * stride * 4) as u64;
+        let mut full_len = 0u64;
+        if let Some(full) = &self.full {
+            for i in 0..count {
+                let words = full
+                    .words(i)
+                    .ok_or_else(|| Error::Corrupt(format!("full vector {i} missing during save")))?;
+                w.write_all(bytemuck::cast_slice(words))?;
+            }
+            full_len = (count * self.cfg.dim * 4) as u64;
+        }
         w.write_all(&meta_bytes)?;
 
         let header = Header {
@@ -143,7 +156,8 @@ impl Index {
             stride_words: stride as u64,
             vec_off: HEADER_SIZE as u64,
             vec_len,
-            meta_off: HEADER_SIZE as u64 + vec_len,
+            full_len,
+            meta_off: HEADER_SIZE as u64 + vec_len + full_len,
             meta_len: meta_bytes.len() as u64,
             meta_crc: crc32fast::hash(&meta_bytes),
         };
@@ -213,8 +227,18 @@ impl Index {
             }
             _ => None,
         };
+        let full_seg = if cfg.rerank {
+            if h.full_len as usize != count * cfg.dim * 4 {
+                return Err(Error::Corrupt("rerank section has the wrong size".into()));
+            }
+            // SAFETY: same as above
+            let map2 = unsafe { memmap2::Mmap::map(&file)? };
+            Some(Segment::new(map2, vec_off + vec_len, cfg.dim, count)?)
+        } else {
+            None
+        };
         let seg = Segment::new(mmap, vec_off, h.stride_words as usize, count)?;
-        let idx = Index::assemble(cfg, Some(seg), book);
+        let idx = Index::assemble(cfg, Some(seg), book, full_seg);
 
         let mut live = 0;
         {

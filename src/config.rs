@@ -9,6 +9,9 @@ pub struct Config {
     pub dim: usize,
     pub metric: Metric,
     pub quantization: Quantization,
+    /// keep full-precision vectors next to the quantized ones and re-score the
+    /// final candidates with them (memory-mapped after a reload, so cold pages stay on disk)
+    pub rerank: bool,
     /// target out-degree on upper layers; layer 0 keeps up to 2*m
     pub m: usize,
     pub ef_construction: usize,
@@ -27,6 +30,7 @@ impl Config {
             dim,
             metric,
             quantization: Quantization::None,
+            rerank: false,
             m: 16,
             ef_construction: 200,
             ef_search: 64,
@@ -40,6 +44,9 @@ impl Config {
         let bad = |msg: &str| Err(Error::InvalidConfig(msg.to_owned()));
         if self.dim == 0 || self.dim > 65_536 {
             return bad("dim must be in 1..=65536");
+        }
+        if self.rerank && self.quantization == Quantization::None {
+            return bad("rerank needs a quantized index");
         }
         if let Quantization::Pq { m } = self.quantization
             && (m == 0 || !self.dim.is_multiple_of(m as usize))

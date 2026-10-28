@@ -90,30 +90,39 @@ about 8.7 k inserts/s on 8 threads (`ef_construction = 200`, `M = 16`).
 
 **SIFT1M versus hnswlib** (1 000 000 x 128, L2, `M=16`, `ef_construction=200`, k=10,
 ground truth from the dataset, single query thread, build on 8 threads, same laptop,
-hnswlib built with `-O3 -march=native`; run one after the other, not concurrently):
+hnswlib built with `-O3 -march=native -static`). Both programs build the index, save it,
+and are then run again in a fresh process that loads the saved index and reports the
+fastest of 5 passes over the 10 000 queries. Run one after the other, not concurrently:
 
 | ef | recall@10 vecdb | recall@10 hnswlib | p50 vecdb | p50 hnswlib | QPS vecdb | QPS hnswlib |
 |---:|---:|---:|---:|---:|---:|---:|
-| 16 | 0.802 | 0.800 | 186 µs | 110 µs | 5.1 k | 8.6 k |
-| 32 | 0.903 | 0.903 | 221 µs | 132 µs | 4.2 k | 7.2 k |
-| 64 | 0.963 | 0.963 | 344 µs | 180 µs | 2.7 k | 5.3 k |
-| 128 | 0.989 | 0.989 | 590 µs | 307 µs | 1.6 k | 3.3 k |
-| 256 | 0.997 | 0.997 | 974 µs | 569 µs | 1.0 k | 1.8 k |
-| 512 | 0.999 | 0.999 | 1.6 ms | 1.0 ms | 610 | 986 |
+| 16 | 0.802 | 0.802 | 69 µs | 61 µs | 14.0 k | 15.3 k |
+| 32 | 0.903 | 0.903 | 116 µs | 102 µs | 8.4 k | 9.4 k |
+| 64 | 0.963 | 0.963 | 200 µs | 183 µs | 4.9 k | 5.3 k |
+| 128 | 0.989 | 0.989 | 367 µs | 338 µs | 2.7 k | 2.8 k |
+| 256 | 0.997 | 0.997 | 683 µs | (noisy) | 1.5 k | (noisy) |
+| 512 | 0.999 | 0.999 | 1.5 ms | (noisy) | 631 | (noisy) |
 
-Build time: vecdb 239 s (4.2 k inserts/s), hnswlib 219 s (4.6 k inserts/s).
+Build time in the same session: vecdb 231 s (4.3 k inserts/s), hnswlib 266 s (3.8 k
+inserts/s); hnswlib took 219 s in an earlier run, so build times on this laptop move by
+about 20% between runs.
 
-Graph quality is the same: recall matches hnswlib at every `ef`.
+Reading it: the graphs are equivalent (recall is identical at every `ef`), and at the
+`ef` values that matter for recall 0.90-0.99 hnswlib is about 8-12% faster per query. At
+`ef` 256 and 512 the hnswlib loaded run came out slower than its own in-process run
+(969 vs 650 µs, 2090 vs 1170 µs), which means the machine was busy for those passes, so
+I don't claim anything there. This is a single laptop with 4 cores and background
+load; a quiet server would tighten the numbers, and I would not rely on a gap smaller than
+about 10% in either direction.
 
-How to read the speed columns. In the table above each program built the index and
-then queried it in the same process, one pass over the queries. That is a fair
-like-for-like setup, but this laptop makes it noisy, and I found a second effect that
-matters more: **a vecdb index queried right after an in-process parallel build is
-noticeably slower than the same index after `save` + `open`** (ef=64: 250-340 µs
-right after the build, 190-220 µs reloaded from the snapshot, several runs each). My
-guess is allocation locality (reloading allocates nodes in id order), but I have not
-verified that. I could not re-run hnswlib with the best-of-N / reloaded protocol, so I
-make no claim about the size of the speed gap beyond "hnswlib was faster in this run".
+Why the protocol matters: **a vecdb index queried right after an in-process parallel
+build is slower than the same index after `save` + `open`** (ef=64: 243-340 µs right
+after the build, 190-210 µs reloaded, several runs each). The cause looks like heap
+layout of the neighbour lists (a reload rewrites them in id order), not the per-record
+"written" check, which I tried removing without a measurable change. I have not
+confirmed the layout explanation with a hardware-counter profiler. An earlier version of
+this table compared both programs right after their in-process builds; that is why the
+old gap looked like almost 2x.
 
 vecdb reloaded from a snapshot, fastest of 5 passes, same SIFT1M protocol:
 

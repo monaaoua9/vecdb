@@ -102,3 +102,36 @@ fn save_while_searching() {
         idx.save(dir.path().join("d.vdb")).unwrap();
     });
 }
+
+#[test]
+fn damaged_snapshots_error_instead_of_panicking() {
+    use vecdb::{Item, Payload};
+    let data = common::clustered(200, 8, 31);
+    let mut c = Config::new(8, Metric::L2);
+    c.max_elements = 500;
+    let idx = Index::new(c).unwrap();
+    let items: Vec<Item> = data
+        .iter()
+        .enumerate()
+        .map(|(i, v)| Item { id: i as u64, vector: v.clone(), payload: Payload::new() })
+        .collect();
+    idx.insert_bulk(&items, 2).unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let good = dir.path().join("good.vdb");
+    idx.save(&good).unwrap();
+    let bytes = std::fs::read(&good).unwrap();
+    let probe = dir.path().join("bad.vdb");
+
+    // header, vector section and metadata all get hit; metadata and header are checksummed
+    for pos in (0..bytes.len()).step_by(37) {
+        let mut b = bytes.clone();
+        b[pos] ^= 0xA5;
+        std::fs::write(&probe, &b).unwrap();
+        let _ = Index::open(&probe);
+    }
+    for cut in (0..bytes.len()).step_by(211) {
+        std::fs::write(&probe, &bytes[..cut]).unwrap();
+        assert!(Index::open(&probe).is_err(), "cut at {cut} opened");
+    }
+}

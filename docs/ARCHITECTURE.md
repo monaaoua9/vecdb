@@ -274,9 +274,11 @@ Stated plainly so nobody has to discover them:
 - **Payloads are immutable** once inserted (delete and re-insert to change).
 - **`max_elements` is fixed at creation** (it sizes the node table); `open_with`
   can raise it when reloading a snapshot directly.
-- **Quantisation is scalar (SQ8) only.** Product quantisation would give
-  higher compression at the cost of a training step and a lookup-table
-  distance kernel; the `VectorRef` abstraction is where it would plug in.
+- **PQ has no rerank stage.** Vectors are only stored as codes, so recall is
+  capped by quantisation error (about 0.71 for 32 bytes on SIFT1M). Keeping
+  full-precision vectors on disk for a final rerank would lift the cap; that
+  is not built. PQ indexes also can't go through `DurableIndex` or the gRPC
+  server yet, because the codebook has to exist before the first insert.
 - **AVX-512 and NEON kernels are verified by compilation and code review
   against the AVX2 versions, not by execution**, because the development
   machine supports neither. The test that checks every available kernel

@@ -2,6 +2,9 @@ use std::ptr::NonNull;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU8, Ordering};
 
+use std::sync::Arc;
+
+use crate::pq::Codebook;
 use crate::quant::{self, Quantization, Sq8Params, code_words};
 
 mod segment;
@@ -17,6 +20,7 @@ const READY: u8 = 2;
 pub enum VectorRef<'a> {
     F32(&'a [f32]),
     Sq8 { codes: &'a [u8], min: f32, scale: f32, norm_sq: f32 },
+    Pq { codes: &'a [u8], book: &'a Codebook },
 }
 
 struct Slab {
@@ -58,10 +62,17 @@ pub struct VectorStore {
     slabs: Box<[OnceLock<Slab>]>,
     base: Option<Segment>,
     base_len: usize,
+    book: Option<Arc<Codebook>>,
 }
 
 impl VectorStore {
-    pub fn new(dim: usize, quant: Quantization, capacity: usize, base: Option<Segment>) -> Self {
+    pub fn new(
+        dim: usize,
+        quant: Quantization,
+        capacity: usize,
+        base: Option<Segment>,
+        book: Option<Arc<Codebook>>,
+    ) -> Self {
         let n_slabs = capacity.div_ceil(SLAB_RECORDS);
         let base_len = base.as_ref().map_or(0, |b| b.len());
         VectorStore {
@@ -72,7 +83,12 @@ impl VectorStore {
             slabs: (0..n_slabs).map(|_| OnceLock::new()).collect(),
             base,
             base_len,
+            book,
         }
+    }
+
+    pub fn codebook(&self) -> Option<&Arc<Codebook>> {
+        self.book.as_ref()
     }
 
     pub fn stride_words(&self) -> usize {
@@ -110,6 +126,10 @@ impl VectorStore {
                 tail[1] = p.scale.to_bits();
                 tail[2] = p.norm_sq.to_bits();
             }
+            Quantization::Pq { m } => {
+                let bytes = bytemuck::cast_slice_mut::<u32, u8>(rec);
+                self.book.as_ref().unwrap().encode(vec, &mut bytes[..m as usize]);
+            }
         }
         slab.state[slot].store(READY, Ordering::Release);
         true
@@ -142,6 +162,10 @@ impl VectorStore {
                     norm_sq: f32::from_bits(w[cw + 2]),
                 }
             }
+            Quantization::Pq { m } => VectorRef::Pq {
+                codes: &bytemuck::cast_slice(w)[..m as usize],
+                book: self.book.as_deref().unwrap(),
+            },
         })
     }
 
@@ -153,6 +177,11 @@ impl VectorStore {
             VectorRef::Sq8 { codes, min, scale, norm_sq } => {
                 buf.resize(self.dim, 0.0);
                 quant::decode(&codes[..self.dim], &Sq8Params { min, scale, norm_sq }, buf);
+                Some(&buf[..])
+            }
+            VectorRef::Pq { codes, book } => {
+                buf.resize(self.dim, 0.0);
+                book.decode(codes, buf);
                 Some(&buf[..])
             }
         }
@@ -190,7 +219,7 @@ mod tests {
 
     #[test]
     fn put_get_f32() {
-        let s = VectorStore::new(3, Quantization::None, 5000, None);
+        let s = VectorStore::new(3, Quantization::None, 5000, None, None);
         assert!(s.put(4000, &[1.0, 2.0, 3.0]));
         assert!(!s.put(4000, &[0.0; 3]));
         match s.get(4000).unwrap() {
@@ -203,7 +232,7 @@ mod tests {
 
     #[test]
     fn put_get_sq8() {
-        let s = VectorStore::new(5, Quantization::Sq8, 10, None);
+        let s = VectorStore::new(5, Quantization::Sq8, 10, None, None);
         let v = [0.1, -0.4, 0.9, 0.0, 0.33];
         assert!(s.put(3, &v));
         let mut buf = Vec::new();
@@ -215,7 +244,7 @@ mod tests {
 
     #[test]
     fn out_of_range_put_is_rejected() {
-        let s = VectorStore::new(2, Quantization::None, 10, None);
+        let s = VectorStore::new(2, Quantization::None, 10, None, None);
         assert!(!s.put(10, &[0.0, 0.0]));
     }
 }

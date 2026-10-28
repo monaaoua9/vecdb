@@ -18,11 +18,14 @@ impl Index {
     /// Builds a fresh index holding only the live vectors, so deleted nodes stop
     /// costing memory and graph hops. Goes through the normal insert path in
     /// chunks, so peak extra memory is one chunk of vectors plus the new index.
-    /// SQ8 vectors are re-quantised from their decoded values.
+    /// SQ8 and PQ vectors are re-quantised from their decoded values (PQ keeps the same codebook).
     pub fn compacted(&self, threads: usize) -> Result<Index> {
         let mut cfg = self.cfg.clone();
         cfg.max_elements = cfg.max_elements.max(self.len());
-        let out = Index::new(cfg)?;
+        let out = match self.store.codebook() {
+            Some(b) => Index::assemble(cfg, None, Some(b.clone())),
+            None => Index::new(cfg)?,
+        };
 
         let total = self.next_id.load(Ordering::Acquire);
         let mut buf = Vec::new();

@@ -57,12 +57,28 @@ fn main() {
         None => {
             let mut cfg = Config::new(dim, Metric::L2);
             cfg.max_elements = n;
-            if std::env::var("SIFT_QUANT").is_ok_and(|q| q == "sq8") {
+            let quant = std::env::var("SIFT_QUANT").unwrap_or_default();
+            if quant == "sq8" {
                 cfg.quantization = vecdb::Quantization::Sq8;
+            }
+            let pq_m = quant.strip_prefix("pq").and_then(|m| m.parse::<u16>().ok());
+            if let Some(m) = pq_m {
+                cfg.quantization = vecdb::Quantization::Pq { m };
             }
             cfg.m = 16;
             cfg.ef_construction = 200;
-            let idx = Index::new(cfg).unwrap();
+            let idx = match pq_m {
+                Some(_) => {
+                    // every 20th vector, 50k rows
+                    let sample: Vec<f32> =
+                        (0..n).step_by(20).flat_map(|i| f(&base[i * dim..(i + 1) * dim])).collect();
+                    let t = Instant::now();
+                    let idx = Index::new_pq(cfg, &sample, threads).unwrap();
+                    println!("pq codebook trained in {:.1}s", t.elapsed().as_secs_f64());
+                    idx
+                }
+                None => Index::new(cfg).unwrap(),
+            };
 
             let t0 = Instant::now();
             for start in (0..n).step_by(50_000) {

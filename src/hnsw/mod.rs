@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use parking_lot::RwLock;
@@ -7,6 +8,8 @@ use crate::config::Config;
 use crate::distance::Space;
 use crate::error::{Error, Result};
 use crate::filter::{Filter, FilterStrategy, Payload, PayloadIndex};
+use crate::pq::Codebook;
+use crate::quant::Quantization;
 use crate::store::{Segment, VectorStore};
 
 mod compact;
@@ -102,12 +105,32 @@ pub struct Index {
 impl Index {
     pub fn new(cfg: Config) -> Result<Index> {
         cfg.validate()?;
-        Ok(Self::assemble(cfg, None))
+        if matches!(cfg.quantization, Quantization::Pq { .. }) {
+            return Err(Error::InvalidConfig("pq needs a trained codebook, use Index::new_pq".into()));
+        }
+        Ok(Self::assemble(cfg, None, None))
     }
 
-    pub(crate) fn assemble(cfg: Config, base: Option<Segment>) -> Index {
+    /// Trains the codebook on `sample` (row-major, `dim` floats per row, at least 256 rows;
+    /// a few tens of thousands is plenty) and returns an empty index that uses it.
+    /// `cfg.quantization` must be `Pq`.
+    pub fn new_pq(cfg: Config, sample: &[f32], threads: usize) -> Result<Index> {
+        cfg.validate()?;
+        let Quantization::Pq { m } = cfg.quantization else {
+            return Err(Error::InvalidConfig("new_pq needs Quantization::Pq".into()));
+        };
+        let plain = Space::new(cfg.metric, cfg.dim, Quantization::None);
+        let mut data = Vec::with_capacity(sample.len());
+        for row in sample.chunks_exact(cfg.dim) {
+            data.extend(plain.sanitize(row)?);
+        }
+        let book = Codebook::train(cfg.dim, m as usize, &data, 12, cfg.seed, threads)?;
+        Ok(Self::assemble(cfg, None, Some(Arc::new(book))))
+    }
+
+    pub(crate) fn assemble(cfg: Config, base: Option<Segment>, book: Option<Arc<Codebook>>) -> Index {
         let space = Space::new(cfg.metric, cfg.dim, cfg.quantization);
-        let store = VectorStore::new(cfg.dim, cfg.quantization, cfg.max_elements, base);
+        let store = VectorStore::new(cfg.dim, cfg.quantization, cfg.max_elements, base, book);
         Index {
             space,
             store,

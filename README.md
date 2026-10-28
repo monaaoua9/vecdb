@@ -131,6 +131,14 @@ of recall at ef=64, and on this CPU is *slower* per query at low `ef` (the AVX2
 `u8 -> f32` widening plus the extra per-query terms cost more than the saved memory
 traffic) and caps out near 0.992 recall. Use it to fit more vectors in RAM, not for speed.
 
+Product quantization (`Quantization::Pq { m }`, `Index::new_pq(cfg, sample, threads)`,
+codebook trained on a sample, 256 centroids per subspace, lookup-table distance). SIFT1M with
+m=32 (32 bytes per vector, 4x smaller than SQ8's 140): snapshot 102 MB including the graph,
+codebook trained in 6 s, recall@10 0.63 / 0.70 / 0.707 at ef 16 / 64 / 512. The ceiling
+is the quantization error, there is no rerank against full vectors, so use SQ8 when you
+need recall above ~0.99. PQ timings are not listed because that run was queried right after
+the build (see above). PQ isn't wired into `DurableIndex` or the gRPC server.
+
 Where the time goes (f32, ef=64, about 1 100 distance evaluations per query):
 distance arithmetic is about 11% of the cycles; the rest is mostly fetching neighbour
 lists and vectors. Prefetching vectors matters (310 µs without, about 225 µs with).
@@ -164,6 +172,7 @@ to SSE2 by LLVM, so this is AVX2 against a decent baseline):
 src/
   distance/   kernels (x86.rs, neon.rs, scalar.rs), metric + SQ8 distance dispatch
   quant.rs    SQ8 encode/decode, record layout
+  pq.rs       PQ codebook training, encode/decode, lookup tables
   store/      vector slabs + mmap segment
   hnsw/       graph.rs (node table), insert.rs, search.rs, scratch.rs (per-thread buffers)
   filter/     payload types, filter tree, roaring inverted index
@@ -180,7 +189,7 @@ examples/     recall sweep, gRPC client
 
 - Reported `distance`: squared L2, `1 − cos`, or negative inner product. Lower is closer.
 - Cosine vectors are normalised on insert; `get` returns the normalised vector.
-- With SQ8, `get` returns the dequantised vector.
+- With SQ8 or PQ, `get` returns the dequantised vector.
 - `Eq` is strict on type (`Int(1)` ≠ `Float(1.0)`); float equality is not indexed.
 - Searches never block on inserts; a search racing an insert may or may not see it.
 - `save` and `checkpoint` pause inserts and deletes while they run. Searches continue.

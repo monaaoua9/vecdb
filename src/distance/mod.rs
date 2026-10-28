@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cell::{OnceCell, RefCell};
 use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
@@ -70,6 +71,13 @@ pub struct PreparedQuery<'a> {
     pub(crate) v: Cow<'a, [f32]>,
     sum: f32,
     norm_sq: f32,
+    // pq only: per-query partial distances, built on the first comparison
+    adc: OnceCell<Vec<f32>>,
+    use_adc: bool,
+}
+
+thread_local! {
+    static DECODED: RefCell<Vec<f32>> = const { RefCell::new(Vec::new()) };
 }
 
 impl PreparedQuery<'_> {
@@ -105,8 +113,17 @@ impl Space {
         let (sum, norm_sq) = match self.quant {
             Quantization::None => (0.0, 0.0),
             Quantization::Sq8 => (v.iter().sum(), (self.k.dot)(v, v)),
+            Quantization::Pq { .. } => (0.0, 0.0),
         };
-        PreparedQuery { v: Cow::Borrowed(v), sum, norm_sq }
+        PreparedQuery { v: Cow::Borrowed(v), sum, norm_sq, adc: OnceCell::new(), use_adc: false }
+    }
+
+    /// like `prepare`, but for a vector that is compared against many stored ones:
+    /// with pq the lookup table pays for itself, decoding each neighbour does not
+    pub fn prepare_indexed<'a>(&self, v: &'a [f32]) -> PreparedQuery<'a> {
+        let mut q = self.prepare(v);
+        q.use_adc = matches!(self.quant, Quantization::Pq { .. });
+        q
     }
 
     /// user-supplied vector: checked, and normalised for cosine
@@ -115,8 +132,10 @@ impl Space {
         let (sum, norm_sq) = match self.quant {
             Quantization::None => (0.0, 0.0),
             Quantization::Sq8 => (v.iter().sum(), (self.k.dot)(&v, &v)),
+            Quantization::Pq { .. } => (0.0, 0.0),
         };
-        Ok(PreparedQuery { v: Cow::Owned(v), sum, norm_sq })
+        let use_adc = matches!(self.quant, Quantization::Pq { .. });
+        Ok(PreparedQuery { v: Cow::Owned(v), sum, norm_sq, adc: OnceCell::new(), use_adc })
     }
 
     pub fn sanitize(&self, v: &[f32]) -> Result<Vec<f32>> {
@@ -154,6 +173,26 @@ impl Space {
                     Metric::InnerProduct => -dot,
                     Metric::Cosine => 1.0 - dot,
                 }
+            }
+            VectorRef::Pq { codes, book } => {
+                if q.use_adc {
+                    let t = q.adc.get_or_init(|| book.adc_table(&q.v, self.metric));
+                    let mut s = 0.0;
+                    for (j, &c) in codes.iter().enumerate() {
+                        s += t[j * crate::pq::K + c as usize];
+                    }
+                    return if self.metric == Metric::Cosine { 1.0 + s } else { s };
+                }
+                DECODED.with(|b| {
+                    let mut b = b.borrow_mut();
+                    b.resize(self.dim, 0.0);
+                    book.decode(codes, &mut b);
+                    match self.metric {
+                        Metric::L2 => (self.k.l2_sq)(&q.v, &b),
+                        Metric::InnerProduct => -(self.k.dot)(&q.v, &b),
+                        Metric::Cosine => 1.0 - (self.k.dot)(&q.v, &b),
+                    }
+                })
             }
         }
     }

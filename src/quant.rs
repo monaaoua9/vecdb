@@ -5,6 +5,10 @@ pub enum Quantization {
     None,
     /// 8 bits per component, min/scale kept per vector
     Sq8,
+    /// product quantization, one byte per `dim / m` components; needs a trained codebook
+    Pq {
+        m: u16,
+    },
 }
 
 /// min, scale, |decoded|^2 stored after the code bytes
@@ -16,6 +20,7 @@ impl Quantization {
         match self {
             Quantization::None => dim,
             Quantization::Sq8 => code_words(dim) + PARAM_WORDS,
+            Quantization::Pq { m } => (m as usize).div_ceil(4),
         }
     }
 

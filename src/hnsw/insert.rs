@@ -84,7 +84,7 @@ impl Index {
             return;
         };
 
-        let q = self.space.prepare(vec);
+        let q = self.space.prepare_indexed(vec);
         let mut s = scratch();
 
         let ep_dist = self.space.dist(&q, self.store.get(ep_id as usize).unwrap());

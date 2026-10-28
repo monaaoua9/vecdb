@@ -2,6 +2,7 @@ pub mod config;
 pub mod distance;
 pub mod error;
 pub mod filter;
+pub mod pq;
 pub mod quant;
 pub mod store;
 

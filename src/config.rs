@@ -41,6 +41,11 @@ impl Config {
         if self.dim == 0 || self.dim > 65_536 {
             return bad("dim must be in 1..=65536");
         }
+        if let Quantization::Pq { m } = self.quantization
+            && (m == 0 || !self.dim.is_multiple_of(m as usize))
+        {
+            return bad("pq m must divide dim");
+        }
         if self.m < 2 || self.m > 256 {
             return bad("m must be in 2..=256");
         }

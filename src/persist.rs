@@ -9,6 +9,7 @@
 use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use serde::{Deserialize, Serialize};
@@ -17,10 +18,12 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::filter::Payload;
 use crate::hnsw::{Index, Node};
+use crate::pq::Codebook;
+use crate::quant::Quantization;
 use crate::store::Segment;
 
 const MAGIC: &[u8; 8] = b"VECDBHNS";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const HEADER_SIZE: usize = 4096;
 const HEADER_USED: usize = 72;
 
@@ -37,6 +40,8 @@ struct Meta {
     entry: Option<(u32, u8)>,
     nodes: Vec<NodeMeta>,
     payloads: Vec<Payload>,
+    // flat m * 256 * dsub centroids, pq only
+    codebook: Option<Vec<f32>>,
 }
 
 struct Header {
@@ -107,6 +112,7 @@ impl Index {
             entry: *self.entry.read(),
             nodes: Vec::with_capacity(count),
             payloads: Vec::with_capacity(count),
+            codebook: self.store.codebook().map(|b| b.centroids().to_vec()),
         };
         for i in 0..count {
             let n =
@@ -198,8 +204,17 @@ impl Index {
             return Err(Error::Corrupt("count exceeds max_elements".into()));
         }
 
+        let book = match (cfg.quantization, meta.codebook) {
+            (Quantization::Pq { m }, Some(c)) => {
+                Some(Arc::new(Codebook::from_parts(cfg.dim, m as usize, c)?))
+            }
+            (Quantization::Pq { .. }, None) => {
+                return Err(Error::Corrupt("pq snapshot without a codebook".into()));
+            }
+            _ => None,
+        };
         let seg = Segment::new(mmap, vec_off, h.stride_words as usize, count)?;
-        let idx = Index::assemble(cfg, Some(seg));
+        let idx = Index::assemble(cfg, Some(seg), book);
 
         let mut live = 0;
         {

@@ -135,9 +135,27 @@ Product quantization (`Quantization::Pq { m }`, `Index::new_pq(cfg, sample, thre
 codebook trained on a sample, 256 centroids per subspace, lookup-table distance). SIFT1M with
 m=32 (32 bytes per vector, 4x smaller than SQ8's 140): snapshot 102 MB including the graph,
 codebook trained in 6 s, recall@10 0.63 / 0.70 / 0.707 at ef 16 / 64 / 512. The ceiling
-is the quantization error, there is no rerank against full vectors, so use SQ8 when you
-need recall above ~0.99. PQ timings are not listed because that run was queried right after
-the build (see above). PQ isn't wired into `DurableIndex` or the gRPC server.
+is the quantization error. `Config::rerank` / `--rerank` keeps full-precision vectors in a
+second, memory-mapped section and re-scores the beam with them (numbers below).
+`DurableIndex::train_pq` stores the codebook in the data directory; the server takes
+`--quantization pq` for a directory that has one.
+
+PQ32 + rerank, SIFT1M, reloaded from the snapshot, fastest of 5 passes:
+
+| ef | recall@10 | p50 | QPS |
+|---:|---:|---:|---:|
+| 16 | 0.720 | 101 µs | 9.8 k |
+| 32 | 0.867 | 142 µs | 7.0 k |
+| 64 | 0.949 | 213 µs | 4.7 k |
+| 128 | 0.985 | 372 µs | 2.7 k |
+| 256 | 0.996 | 642 µs | 1.6 k |
+| 512 | 0.999 | 1.2 ms | 847 |
+
+Rerank removes the 0.71 ceiling, and at ef=64 the latency matches plain f32 (213 vs 210 µs)
+while the traversal only touches 32-byte codes. Recall is a bit below f32 at the same `ef`
+(0.949 vs 0.963) because the graph is built and walked on quantised distances. The snapshot
+is 614 MB since it holds both the codes and the f32 section; what shrinks is the memory the
+search keeps hot (codes plus graph), not the file. The build is slower (331 s vs 190 s for SQ8).
 
 Where the time goes (f32, ef=64, about 1 100 distance evaluations per query):
 distance arithmetic is about 11% of the cycles; the rest is mostly fetching neighbour
@@ -198,7 +216,7 @@ examples/     recall sweep, gRPC client
 
 ## Not done (yet)
 
-No product quantization, no online compaction, single node only. AVX-512 and NEON kernels are checked by
+No online compaction, single node only. The PQ graph is built on quantised distances (only the final ranking uses full vectors). AVX-512 and NEON kernels are checked by
 compilation and review against the AVX2 versions, not by execution on this
 machine; the kernel-vs-scalar test runs them wherever the hardware exists (CI
 includes an aarch64 job). Details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#8-known-limits-and-what-comes-next).

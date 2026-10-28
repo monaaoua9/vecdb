@@ -274,11 +274,14 @@ Stated plainly so nobody has to discover them:
 - **Payloads are immutable** once inserted (delete and re-insert to change).
 - **`max_elements` is fixed at creation** (it sizes the node table); `open_with`
   can raise it when reloading a snapshot directly.
-- **PQ has no rerank stage.** Vectors are only stored as codes, so recall is
-  capped by quantisation error (about 0.71 for 32 bytes on SIFT1M). Keeping
-  full-precision vectors on disk for a final rerank would lift the cap; that
-  is not built. PQ indexes also can't go through `DurableIndex` or the gRPC
-  server yet, because the codebook has to exist before the first insert.
+- **PQ needs a codebook before the first insert.** In the library that is
+  `Index::new_pq`; for a durable directory, `DurableIndex::train_pq` writes
+  `codebook.bin` once and `open` loads it (also before wal replay). The gRPC
+  server accepts `--quantization pq` only for a directory that already has one.
+  Without `rerank`, PQ recall is capped by quantisation error (about 0.71 for
+  32 bytes on SIFT1M). `Config::rerank` keeps an f32 copy in a second section of
+  the snapshot (memory-mapped, so cold pages stay on disk) and re-scores the
+  whole search beam with it. The graph itself is still built on quantised distances.
 - **AVX-512 and NEON kernels are verified by compilation and code review
   against the AVX2 versions, not by execution**, because the development
   machine supports neither. The test that checks every available kernel

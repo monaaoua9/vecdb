@@ -163,7 +163,12 @@ lists and vectors. Prefetching vectors matters (310 µs without, about 225 µs w
 Things that made no measurable difference: a smaller visited-set, skipping a
 per-candidate node lookup when nothing is deleted, and a flat layer-0 neighbour array
 (tried and reverted; the apparent gain in one A/B run came from comparing a
-freshly-built index against a reloaded one).
+freshly-built index against a reloaded one), and dropping the per-record "written"
+check from the search loop (it is one extra load, but in-process p50 at ef=64 only went
+from 250-320 to 243 µs, reloaded stayed at 200). The in-process vs reloaded gap is
+therefore not that check; what is left is heap layout of the neighbour lists, which
+a reload rewrites in id order. Not verified with a hardware-counter profiler, since
+none is available on this machine.
 
 Reproduce: `cargo run --release --example sift -- <dir>` and
 `benches/compare/hnswlib_sift.cpp` (build line is in its header).

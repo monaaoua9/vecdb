@@ -15,29 +15,29 @@ Measured 2026-10-29.
 cargo run --release --example recall -- 50000 128 8 latent
 ```
 
-50,000 vectors, dim 128, built on 8 threads, data with latent structure. Recall@10 is against exact search. Latency is p50 per query.
+50,000 vectors, dim 128, built on 8 threads, data with latent structure. Recall@10 is against exact search. Three back-to-back runs; latency and QPS are the median with min–max in brackets. Recall barely moves, so I give its range.
 
-f32 vectors (build 5.7 s, 24.5 MiB of vectors):
+f32 vectors (24.5 MiB of vectors):
 
-| ef | recall@10 | p50 | QPS |
+| ef | recall@10 | p50 (µs) | QPS |
 |---:|---:|---:|---:|
-| 16 | 0.9535 | 55 µs | 17,664 |
-| 32 | 0.9890 | 93 µs | 10,254 |
-| 64 | 0.9995 | 167 µs | 5,650 |
-| 128 | 1.0000 | 272 µs | 3,602 |
-| 256 | 1.0000 | 512 µs | 1,925 |
+| 16 | 0.9525 – 0.954 | 64 (63 – 70) | 14,856 (13,144 – 15,115) |
+| 32 | 0.9895 – 0.990 | 125 (117 – 130) | 7,525 (7,380 – 8,027) |
+| 64 | 0.9995 | 186 (180 – 244) | 4,994 (3,870 – 5,214) |
+| 128 | 1.0000 | 375 (321 – 421) | 2,550 (2,298 – 2,986) |
+| 256 | 1.0000 | 624 (584 – 736) | 1,518 (1,300 – 1,613) |
 
-SQ8 (build 4.7 s, 6.7 MiB of vectors):
+SQ8 (6.7 MiB of vectors):
 
-| ef | recall@10 | p50 | QPS |
+| ef | recall@10 | p50 (µs) | QPS |
 |---:|---:|---:|---:|
-| 16 | 0.9530 | 39 µs | 24,448 |
-| 32 | 0.9920 | 64 µs | 15,401 |
-| 64 | 0.9995 | 118 µs | 8,325 |
-| 128 | 1.0000 | 219 µs | 4,388 |
-| 256 | 1.0000 | 399 µs | 2,480 |
+| 16 | 0.951 – 0.953 | 54 (50 – 62) | 18,142 (15,436 – 19,140) |
+| 32 | 0.9915 – 0.992 | 92 (75 – 97) | 9,946 (9,456 – 13,127) |
+| 64 | 0.9995 | 165 (135 – 191) | 5,488 (5,248 – 6,678) |
+| 128 | 1.0000 | 279 (246 – 337) | 3,272 (2,852 – 3,784) |
+| 256 | 1.0000 | 490 (453 – 637) | 1,882 (1,620 – 2,029) |
 
-SQ8 uses 3.7× less memory for the vectors with the same recall at every ef here, and is faster. This data set is small and well-behaved, so don't expect the recall to stay this high on a hard one.
+SQ8 uses 3.7× less memory for the vectors with about the same recall at every ef here, and has the lower median latency at every ef. This data set is small and well-behaved, so don't expect recall to stay this high on a hard one.
 
 ## SIMD kernels
 
@@ -45,7 +45,7 @@ SQ8 uses 3.7× less memory for the vectors with the same recall at every ef here
 cargo bench --bench distance -- --warm-up-time 1 --measurement-time 2
 ```
 
-Criterion, median of the reported interval, ns per call:
+Criterion, median of the reported interval, ns per call (criterion already reports its own confidence interval, so this is one run):
 
 | dim | op | scalar | AVX2+FMA |
 |---:|---|---:|---:|
@@ -67,6 +67,7 @@ The README has SIFT1M results (recall vs latency for f32, SQ8 and PQ32 + rerank)
 
 ## Limits of these numbers
 
-- Single machine, one run per ef, query set drawn from the same distribution as the data.
+- Single machine. Latency moves up to about 35% between runs (ef=64 f32 p50 went from 180 to 244 µs), so don't read differences under that as real.
+- Query set drawn from the same distribution as the data.
 - No comparison against another engine in this file.
 - The AVX-512 and NEON kernels are not exercised here (this CPU has neither).

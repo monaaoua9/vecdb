@@ -217,6 +217,7 @@ proto/        vectordb.proto
 tests/        integration tests (+ common/ data generators)
 benches/      criterion benchmarks
 examples/     recall sweep, gRPC client
+docs/         architecture, design decisions, benchmarks
 ```
 
 ## Semantics worth knowing

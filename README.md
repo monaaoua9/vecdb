@@ -37,7 +37,7 @@ let index = Index::open("snapshot-000000000001.vdb")?; // vectors are mmap'd
 | **Durability** | `DurableIndex`: snapshot generations + write-ahead log (CRC per record, torn tails truncated, idempotent replay), optional fsync with group commit (concurrent writers share one fsync) |
 | **API** | tonic gRPC: insert, streaming bulk insert, search, get, delete, stats, snapshot, health |
 
-Design write-up with diagrams: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Design write-up with diagrams: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The short version of the main decisions: [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Build and run
 

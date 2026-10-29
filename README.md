@@ -71,6 +71,8 @@ cargo bench --bench index      # search latency by ef, insert cost
 cargo run --release --example recall -- 50000 128 8 latent
 ```
 
+A recent run of the recall sweep and the SIMD kernels, with commands and caveats, is in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+
 Numbers below are from a laptop (i5-8365U, 4 cores / 8 threads, AVX2, no AVX-512),
 Windows, `cargo build --release`. Treat them as a sanity check, not a leaderboard.
 

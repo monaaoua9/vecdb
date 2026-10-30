@@ -65,6 +65,14 @@ struct Args {
     #[arg(long)]
     text_field: Option<String>,
 
+    /// file with one API key per line; when given, clients must send `authorization: Bearer <key>`
+    #[arg(long)]
+    api_keys_file: Option<PathBuf>,
+
+    /// serve Prometheus metrics over plain HTTP on this address (GET /metrics)
+    #[arg(long)]
+    metrics_listen: Option<SocketAddr>,
+
     /// how often the running server checks the deleted share, 0 = start-up only
     #[arg(long, default_value_t = 60)]
     compact_check_secs: u64,
@@ -166,5 +174,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
 
     let every = Duration::from_secs(args.snapshot_every_secs);
-    server::serve_collections(cols, args.listen, every, shutdown).await
+    let opts = server::ServeOptions {
+        api_keys: args.api_keys_file.as_deref().map(server::ApiKeys::from_file).transpose()?,
+        metrics_addr: args.metrics_listen,
+    };
+    server::serve_with(cols, args.listen, every, opts, shutdown).await
 }

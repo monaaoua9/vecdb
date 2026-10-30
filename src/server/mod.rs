@@ -14,7 +14,12 @@ use crate::durable::DurableIndex;
 use crate::quant::Quantization;
 use crate::hnsw::{Item, SearchParams};
 
+mod auth;
 mod convert;
+mod metrics;
+
+pub use auth::ApiKeys;
+pub use metrics::Metrics;
 
 #[allow(clippy::all)]
 pub mod pb {
@@ -421,11 +426,29 @@ pub async fn serve(
     serve_collections(cols, addr, snapshot_every, shutdown).await
 }
 
-/// Serves until `shutdown` resolves, then writes a final snapshot of every durable collection.
+#[derive(Default)]
+pub struct ServeOptions {
+    /// when set, every data RPC needs `authorization: Bearer <key>` (the health service stays open)
+    pub api_keys: Option<ApiKeys>,
+    /// plain-HTTP Prometheus endpoint, `GET /metrics`
+    pub metrics_addr: Option<SocketAddr>,
+}
+
 pub async fn serve_collections(
     cols: Arc<Collections>,
     addr: SocketAddr,
     snapshot_every: Duration,
+    shutdown: impl Future<Output = ()>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    serve_with(cols, addr, snapshot_every, ServeOptions::default(), shutdown).await
+}
+
+/// Serves until `shutdown` resolves, then writes a final snapshot of every durable collection.
+pub async fn serve_with(
+    cols: Arc<Collections>,
+    addr: SocketAddr,
+    snapshot_every: Duration,
+    opts: ServeOptions,
     shutdown: impl Future<Output = ()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let svc = Arc::new(VectorDbService::new(cols.clone()));
@@ -453,18 +476,39 @@ pub async fn serve_collections(
         })
     });
 
+    let metrics = Metrics::default();
+    let scraper = opts.metrics_addr.map(|a| {
+        let (m, c) = (metrics.clone(), cols.clone());
+        tokio::spawn(async move {
+            if let Err(e) = metrics::serve_http(a, m, c).await {
+                tracing::error!(error = %e, "metrics endpoint stopped");
+            }
+        })
+    });
+
+    let keys = opts.api_keys;
+    let data = tonic::service::interceptor::InterceptedService::new(
+        VectorDbServer::from_arc(svc.clone())
+            .max_decoding_message_size(MAX_MESSAGE_BYTES)
+            .max_encoding_message_size(MAX_MESSAGE_BYTES),
+        move |req: Request<()>| match &keys {
+            Some(k) => k.check(req),
+            None => Ok(req),
+        },
+    );
+
     tracing::info!(%addr, "listening");
     tonic::transport::Server::builder()
+        .layer(metrics::MetricsLayer(metrics))
         .add_service(health_svc)
-        .add_service(
-            VectorDbServer::from_arc(svc.clone())
-                .max_decoding_message_size(MAX_MESSAGE_BYTES)
-                .max_encoding_message_size(MAX_MESSAGE_BYTES),
-        )
+        .add_service(data)
         .serve_with_shutdown(addr, shutdown)
         .await?;
 
     if let Some(t) = ticker {
+        t.abort();
+    }
+    if let Some(t) = scraper {
         t.abort();
     }
     for (name, path, n) in svc.checkpoint_all().await? {

@@ -1659,6 +1659,7 @@ dependencies = [
  "clap",
  "crc32fast",
  "criterion",
+ "http",
  "memmap2",
  "parking_lot",
  "postcard",
@@ -1673,6 +1674,7 @@ dependencies = [
  "tonic-health",
  "tonic-prost",
  "tonic-prost-build",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]

@@ -378,3 +378,72 @@ async fn text_and_hybrid_search_over_grpc() {
     stop_tx.send(()).unwrap();
     srv.await.unwrap().unwrap();
 }
+
+async fn plain_server(opts: server::ServeOptions) -> (std::net::SocketAddr, oneshot::Sender<()>) {
+    let mut cfg = Config::new(2, Metric::L2);
+    cfg.max_elements = 50;
+    let index = Arc::new(DurableIndex::in_memory(Index::new(cfg).unwrap()));
+    let cols = Arc::new(vecdb::Collections::new(index));
+    let addr = free_addr();
+    let (tx, rx) = oneshot::channel::<()>();
+    tokio::spawn(server::serve_with(cols, addr, Duration::ZERO, opts, async {
+        let _ = rx.await;
+    }));
+    (addr, tx)
+}
+
+#[tokio::test]
+async fn api_keys_gate_the_data_rpcs() {
+    let keys = server::ApiKeys::new(["s3cret".to_string()]);
+    let (addr, stop) = plain_server(server::ServeOptions { api_keys: Some(keys), ..Default::default() }).await;
+    let mut c = connect(addr).await;
+    let ins = || pb::InsertRequest { id: 1, vector: vec![1.0, 2.0], payload: None };
+
+    assert_eq!(c.insert(ins()).await.unwrap_err().code(), tonic::Code::Unauthenticated);
+
+    let mut bad = tonic::Request::new(ins());
+    bad.metadata_mut().insert("authorization", "Bearer nope".parse().unwrap());
+    assert_eq!(c.insert(bad).await.unwrap_err().code(), tonic::Code::Unauthenticated);
+
+    let mut good = tonic::Request::new(ins());
+    good.metadata_mut().insert("authorization", "Bearer s3cret".parse().unwrap());
+    c.insert(good).await.unwrap();
+
+    // health checks stay reachable for load balancers
+    let chan = tonic::transport::Channel::from_shared(format!("http://{addr}")).unwrap().connect().await.unwrap();
+    let mut h = tonic_health::pb::health_client::HealthClient::new(chan);
+    h.check(tonic_health::pb::HealthCheckRequest { service: String::new() }).await.unwrap();
+
+    let _ = stop.send(());
+}
+
+#[tokio::test]
+async fn metrics_endpoint_counts_requests() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let maddr = free_addr();
+    let (addr, stop) =
+        plain_server(server::ServeOptions { metrics_addr: Some(maddr), ..Default::default() }).await;
+    let mut c = connect(addr).await;
+    for i in 0..3u64 {
+        c.insert(pb::InsertRequest { id: i, vector: vec![i as f32, 0.0], payload: None }).await.unwrap();
+    }
+    c.insert(pb::InsertRequest { id: 1, vector: vec![0.0, 0.0], payload: None }).await.unwrap_err();
+    c.search(pb::SearchRequest { vector: vec![0.0, 0.0], k: 1, ..Default::default() }).await.unwrap();
+
+    let mut body = String::new();
+    for _ in 0..100 {
+        if let Ok(mut s) = tokio::net::TcpStream::connect(maddr).await {
+            s.write_all(b"GET /metrics HTTP/1.1\r\nHost: x\r\n\r\n").await.unwrap();
+            s.read_to_string(&mut body).await.unwrap();
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(body.starts_with("HTTP/1.1 200"), "{body}");
+    assert!(body.contains("vecdb_rpc_requests_total{rpc=\"Insert\",result=\"ok\"} 3"), "{body}");
+    assert!(body.contains("vecdb_rpc_requests_total{rpc=\"Insert\",result=\"error\"} 1"), "{body}");
+    assert!(body.contains("vecdb_rpc_duration_seconds_count{rpc=\"Search\"} 1"), "{body}");
+    assert!(body.contains("vecdb_vectors{collection=\"default\"} 3"), "{body}");
+
+    let _ = stop.send(());
+}

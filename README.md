@@ -97,11 +97,9 @@ cargo run --example client     # small gRPC client against a running server
 ## Tests and benchmarks
 
 ```sh
-cargo test                     # 49 tests: kernels vs scalar, recall, concurrency,
-                               # filtering, persistence/corruption, WAL recovery, gRPC end-to-end
-cargo bench --bench distance   # criterion, every kernel the CPU supports
-cargo bench --bench index      # search latency by ef, insert cost
-cargo run --release --example recall -- 50000 128 8 latent
+cargo test                     # kernels vs scalar, recall, concurrency, filtering,
+                               # persistence/corruption, WAL recovery, gRPC end-to-end,
+                               # model-based and fuzz tests (see tests/model.rs, snapshot_fuzz.rs)
 ```
 
 Numbers below are from a laptop (i5-8365U, 4 cores / 8 threads, AVX2, no AVX-512),

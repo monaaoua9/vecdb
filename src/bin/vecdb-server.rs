@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use clap::{Parser, ValueEnum};
 use vecdb::server;
-use vecdb::{Config, Durability, DurableIndex, Index, Metric, Quantization};
+use vecdb::{Collections, Config, Durability, DurableIndex, Index, Metric, Quantization};
 
 #[derive(Clone, Copy, ValueEnum)]
 enum MetricArg {
@@ -119,29 +119,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
     let index = Arc::new(index);
     tracing::info!(kernel = index.stats().kernel, dim = index.config().dim, "index ready");
+    let cols = Arc::new(Collections::new(index));
+    let extra = cols.load_existing()?;
+    if extra > 0 {
+        tracing::info!(extra, "collections loaded");
+    }
 
     if args.compact_above > 0.0 && args.compact_check_secs > 0 {
-        let (index, above) = (index.clone(), args.compact_above);
+        let (cols, above) = (cols.clone(), args.compact_above);
         let every = Duration::from_secs(args.compact_check_secs);
         tokio::spawn(async move {
             let mut t = tokio::time::interval(every);
             t.tick().await;
             loop {
                 t.tick().await;
-                let idx = index.clone();
-                let ran = tokio::task::spawn_blocking(move || {
-                    if idx.tombstone_ratio() <= above {
-                        return Ok(false);
+                for (name, idx) in cols.list() {
+                    let ran = tokio::task::spawn_blocking(move || {
+                        if idx.tombstone_ratio() <= above {
+                            return Ok(false);
+                        }
+                        let threads = std::thread::available_parallelism().map_or(2, |n| n.get());
+                        idx.compact_online(threads)
+                    })
+                    .await;
+                    match ran {
+                        Ok(Ok(true)) => tracing::info!(collection = %name, "online compaction done"),
+                        Ok(Ok(false)) => {}
+                        Ok(Err(e)) => tracing::error!(collection = %name, error = %e, "online compaction failed"),
+                        Err(e) => tracing::error!(error = %e, "compaction worker died"),
                     }
-                    let threads = std::thread::available_parallelism().map_or(2, |n| n.get());
-                    idx.compact_online(threads)
-                })
-                .await;
-                match ran {
-                    Ok(Ok(true)) => tracing::info!("online compaction done"),
-                    Ok(Ok(false)) => {}
-                    Ok(Err(e)) => tracing::error!(error = %e, "online compaction failed"),
-                    Err(e) => tracing::error!(error = %e, "compaction worker died"),
                 }
             }
         });
@@ -153,5 +159,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
 
     let every = Duration::from_secs(args.snapshot_every_secs);
-    server::serve(index, args.listen, every, shutdown).await
+    server::serve_collections(cols, args.listen, every, shutdown).await
 }

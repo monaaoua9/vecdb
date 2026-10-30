@@ -15,7 +15,15 @@ service VectorDb {
   rpc Stats(StatsRequest) returns (StatsResponse);
   // write a snapshot into the server's data directory
   rpc Snapshot(SnapshotRequest) returns (SnapshotResponse);
+
+  rpc CreateCollection(CreateCollectionRequest) returns (CreateCollectionResponse);
+  rpc DropCollection(DropCollectionRequest) returns (DropCollectionResponse);
+  rpc ListCollections(ListCollectionsRequest) returns (ListCollectionsResponse);
 }
+
+// Every data RPC above acts on the collection named in the `x-collection` request
+// metadata; without the header it is the "default" collection (the index the server
+// was started with).
 
 message Value {
   oneof kind {
@@ -148,4 +156,55 @@ message SnapshotRequest {}
 message SnapshotResponse {
   string path = 1;
   uint64 vectors = 2;
+}
+
+enum MetricKind {
+  METRIC_KIND_L2 = 0;
+  METRIC_KIND_COSINE = 1;
+  METRIC_KIND_INNER_PRODUCT = 2;
+}
+
+enum QuantizationKind {
+  QUANTIZATION_KIND_NONE = 0;
+  QUANTIZATION_KIND_SQ8 = 1;
+  QUANTIZATION_KIND_BINARY = 2;
+}
+
+// zero values mean "server default" for everything except dim
+message CollectionConfig {
+  uint32 dim = 1;
+  MetricKind metric = 2;
+  QuantizationKind quantization = 3;
+  bool rerank = 4;
+  uint32 m = 5;
+  uint32 ef_construction = 6;
+  uint32 ef_search = 7;
+  uint64 max_elements = 8;
+}
+
+message CreateCollectionRequest {
+  string name = 1;
+  CollectionConfig config = 2;
+}
+
+message CreateCollectionResponse {}
+
+message DropCollectionRequest {
+  string name = 1;
+}
+
+message DropCollectionResponse {}
+
+message ListCollectionsRequest {}
+
+message CollectionInfo {
+  string name = 1;
+  uint32 dim = 2;
+  string metric = 3;
+  string quantization = 4;
+  uint64 live = 5;
+}
+
+message ListCollectionsResponse {
+  repeated CollectionInfo collections = 1;
 }

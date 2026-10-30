@@ -173,3 +173,68 @@ async fn upsert_and_payload_updates_over_grpc() {
     stop_tx.send(()).unwrap();
     srv.await.unwrap().unwrap();
 }
+
+fn to<T>(msg: T, collection: &str) -> tonic::Request<T> {
+    let mut r = tonic::Request::new(msg);
+    r.metadata_mut().insert("x-collection", collection.parse().unwrap());
+    r
+}
+
+#[tokio::test]
+async fn collections_over_grpc() {
+    let dir = tempfile::tempdir().unwrap();
+    let index = Arc::new(DurableIndex::open(dir.path(), Config::new(4, Metric::L2), Durability::Flush).unwrap());
+    let addr = free_addr();
+    let (stop_tx, stop_rx) = oneshot::channel::<()>();
+    let srv = tokio::spawn(server::serve(index, addr, Duration::ZERO, async {
+        let _ = stop_rx.await;
+    }));
+    let mut c = connect(addr).await;
+
+    let cfg = pb::CollectionConfig {
+        dim: 2,
+        metric: pb::MetricKind::Cosine as i32,
+        max_elements: 100,
+        ..Default::default()
+    };
+    c.create_collection(pb::CreateCollectionRequest { name: "docs".into(), config: Some(cfg.clone()) })
+        .await
+        .unwrap();
+    let dup = c
+        .create_collection(pb::CreateCollectionRequest { name: "docs".into(), config: Some(cfg.clone()) })
+        .await
+        .unwrap_err();
+    assert_eq!(dup.code(), tonic::Code::AlreadyExists);
+    let bad = c
+        .create_collection(pb::CreateCollectionRequest { name: "no way".into(), config: Some(cfg) })
+        .await
+        .unwrap_err();
+    assert_eq!(bad.code(), tonic::Code::InvalidArgument);
+
+    // same id in both collections, different dimensions
+    c.insert(pb::InsertRequest { id: 1, vector: vec![1.0, 0.0], payload: None }).await.unwrap_err();
+    c.insert(to(pb::InsertRequest { id: 1, vector: vec![1.0, 0.0], payload: None }, "docs")).await.unwrap();
+    c.insert(pb::InsertRequest { id: 1, vector: vec![0.0; 4], payload: None }).await.unwrap();
+
+    let a = c.get(to(pb::GetRequest { id: 1 }, "docs")).await.unwrap().into_inner();
+    let b = c.get(pb::GetRequest { id: 1 }).await.unwrap().into_inner();
+    assert_eq!((a.vector.len(), b.vector.len()), (2, 4));
+
+    let missing = c.get(to(pb::GetRequest { id: 1 }, "nope")).await.unwrap_err();
+    assert_eq!(missing.code(), tonic::Code::NotFound);
+
+    let list = c.list_collections(pb::ListCollectionsRequest {}).await.unwrap().into_inner().collections;
+    let names: Vec<_> = list.iter().map(|i| (i.name.as_str(), i.dim, i.live)).collect();
+    assert_eq!(names, [("default", 4, 1), ("docs", 2, 1)]);
+
+    c.drop_collection(pb::DropCollectionRequest { name: "docs".into() }).await.unwrap();
+    assert_eq!(
+        c.get(to(pb::GetRequest { id: 1 }, "docs")).await.unwrap_err().code(),
+        tonic::Code::NotFound
+    );
+    let default = c.drop_collection(pb::DropCollectionRequest { name: "default".into() }).await.unwrap_err();
+    assert_eq!(default.code(), tonic::Code::InvalidArgument);
+
+    stop_tx.send(()).unwrap();
+    srv.await.unwrap().unwrap();
+}

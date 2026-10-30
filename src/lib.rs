@@ -1,3 +1,4 @@
+pub mod collections;
 pub mod config;
 pub mod distance;
 pub mod error;
@@ -14,6 +15,7 @@ pub mod snapshots;
 #[cfg(feature = "server")]
 pub mod server;
 
+pub use collections::Collections;
 pub use config::Config;
 pub use distance::Metric;
 pub use durable::{Durability, DurableIndex};

@@ -371,6 +371,14 @@ impl DurableIndex {
         }
     }
 
+    pub fn dir(&self) -> Option<&Path> {
+        self.dir.as_deref()
+    }
+
+    pub fn durability(&self) -> Durability {
+        self.mode
+    }
+
     pub fn is_durable(&self) -> bool {
         self.dir.is_some()
     }

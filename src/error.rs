@@ -18,6 +18,15 @@ pub enum Error {
     #[error("id {0} not found")]
     NotFound(u64),
 
+    #[error("collection {0} not found")]
+    CollectionNotFound(String),
+
+    #[error("collection {0} already exists")]
+    CollectionExists(String),
+
+    #[error("invalid collection name: {0}")]
+    InvalidName(String),
+
     #[error("index is full ({0} elements)")]
     CapacityExceeded(usize),
 

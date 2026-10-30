@@ -79,6 +79,13 @@ struct Args {
     #[arg(long, requires = "tls_cert")]
     tls_key: Option<PathBuf>,
 
+    /// run as a read-only replica of the leader at this URL (http://host:port); in-memory,
+    /// reloads from the leader on start-up, takes dimensions and metric from the leader
+    #[arg(long)]
+    follow: Option<String>,
+    #[arg(long, requires = "follow")]
+    follow_api_key: Option<String>,
+
     /// how often the running server checks the deleted share, 0 = start-up only
     #[arg(long, default_value_t = 60)]
     compact_check_secs: u64,
@@ -124,7 +131,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .init();
 
     let args = Args::parse();
-    let cfg = build_config(&args);
+    if args.follow.is_some() && args.data_dir.is_some() {
+        return Err("--follow runs in memory, drop --data-dir".into());
+    }
+    let mut cfg = build_config(&args);
+    if args.follow.is_some() {
+        // placeholder, the leader's snapshot replaces it
+        cfg.quantization = Quantization::None;
+        cfg.rerank = false;
+    }
     let mode = if args.wal_fsync { Durability::Fsync } else { Durability::Flush };
     let mut index = match &args.data_dir {
         Some(dir) => DurableIndex::open(dir, cfg, mode)?,
@@ -174,9 +189,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         });
     }
 
-    let shutdown = async {
-        let _ = tokio::signal::ctrl_c().await;
-        tracing::info!("shutting down");
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if let Some(leader) = args.follow.clone() {
+        let (cols, stop) = (cols.clone(), stop.clone());
+        let key = args.follow_api_key.clone();
+        tokio::spawn(async move {
+            if let Err(e) = server::follow(cols, leader, key, stop).await {
+                tracing::error!(error = %e, "replication stopped");
+            }
+        });
+    }
+
+    let shutdown = {
+        let stop = stop.clone();
+        async move {
+            let _ = tokio::signal::ctrl_c().await;
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            tracing::info!("shutting down");
+        }
     };
 
     let every = Duration::from_secs(args.snapshot_every_secs);
@@ -188,6 +218,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         tls,
         api_keys: args.api_keys_file.as_deref().map(server::ApiKeys::from_file).transpose()?,
         metrics_addr: args.metrics_listen,
+        read_only: args.follow.is_some(),
     };
     server::serve_with(cols, args.listen, every, opts, shutdown).await
 }

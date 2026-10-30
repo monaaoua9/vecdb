@@ -17,9 +17,11 @@ use crate::hnsw::{Item, SearchParams};
 mod auth;
 mod convert;
 mod metrics;
+mod replicate;
 
 pub use auth::ApiKeys;
 pub use metrics::Metrics;
+pub use replicate::{follow, follow_every};
 
 #[allow(clippy::all)]
 pub mod pb {
@@ -39,11 +41,21 @@ const COLLECTION_HEADER: &str = "x-collection";
 
 pub struct VectorDbService {
     cols: Arc<Collections>,
+    read_only: bool,
+    // set when the server is shutting down, so replication streams end and let it finish
+    stop: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl VectorDbService {
     pub fn new(cols: Arc<Collections>) -> Self {
-        VectorDbService { cols }
+        VectorDbService { cols, read_only: false, stop: Default::default() }
+    }
+
+    fn writable(&self) -> Result<(), Status> {
+        if self.read_only {
+            return Err(Status::failed_precondition("this server is a read-only replica"));
+        }
+        Ok(())
     }
 
     fn col<T>(&self, req: &Request<T>) -> Result<Arc<DurableIndex>, Status> {
@@ -170,6 +182,7 @@ fn blocking_err(e: tokio::task::JoinError) -> Status {
 #[tonic::async_trait]
 impl VectorDb for VectorDbService {
     async fn insert(&self, req: Request<pb::InsertRequest>) -> Result<Response<pb::InsertResponse>, Status> {
+        self.writable()?;
         let index = self.col(&req)?;
         let r = req.into_inner();
         let payload = convert::payload_in(r.payload)?;
@@ -178,6 +191,7 @@ impl VectorDb for VectorDbService {
     }
 
     async fn upsert(&self, req: Request<pb::InsertRequest>) -> Result<Response<pb::InsertResponse>, Status> {
+        self.writable()?;
         let index = self.col(&req)?;
         let r = req.into_inner();
         let payload = convert::payload_in(r.payload)?;
@@ -189,6 +203,7 @@ impl VectorDb for VectorDbService {
         &self,
         req: Request<pb::UpdatePayloadRequest>,
     ) -> Result<Response<pb::UpdatePayloadResponse>, Status> {
+        self.writable()?;
         let index = self.col(&req)?;
         let r = req.into_inner();
         let payload = convert::payload_in(r.payload)?;
@@ -204,6 +219,7 @@ impl VectorDb for VectorDbService {
         &self,
         req: Request<Streaming<pb::InsertRequest>>,
     ) -> Result<Response<pb::InsertStreamResponse>, Status> {
+        self.writable()?;
         let target = self.col(&req)?;
         let mut stream = req.into_inner();
         let threads = std::thread::available_parallelism().map_or(2, |n| n.get());
@@ -330,6 +346,7 @@ impl VectorDb for VectorDbService {
     }
 
     async fn delete(&self, req: Request<pb::DeleteRequest>) -> Result<Response<pb::DeleteResponse>, Status> {
+        self.writable()?;
         let index = self.col(&req)?;
         let id = req.into_inner().id;
         spawn_blocking(move || index.delete(id)).await.map_err(blocking_err)??;
@@ -370,10 +387,29 @@ impl VectorDb for VectorDbService {
         }
     }
 
+    type ReplicateStream = tokio_stream::wrappers::ReceiverStream<Result<pb::ReplicationMessage, Status>>;
+
+    async fn replicate(
+        &self,
+        req: Request<pb::ReplicateRequest>,
+    ) -> Result<Response<Self::ReplicateStream>, Status> {
+        let index = self.col(&req)?;
+        let dir = index
+            .dir()
+            .ok_or_else(|| Status::failed_precondition("only a server with a data directory can feed replicas"))?
+            .to_path_buf();
+        let config = postcard::to_stdvec(&index.config()).map_err(|e| Status::internal(e.to_string()))?;
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        let stop = self.stop.clone();
+        spawn_blocking(move || replicate::stream_to_replica(dir, config, tx, stop));
+        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(rx)))
+    }
+
     async fn create_collection(
         &self,
         req: Request<pb::CreateCollectionRequest>,
     ) -> Result<Response<pb::CreateCollectionResponse>, Status> {
+        self.writable()?;
         let r = req.into_inner();
         let cfg = collection_config(r.config.ok_or_else(|| Status::invalid_argument("config is required"))?)?;
         let cols = self.cols.clone();
@@ -385,6 +421,7 @@ impl VectorDb for VectorDbService {
         &self,
         req: Request<pb::DropCollectionRequest>,
     ) -> Result<Response<pb::DropCollectionResponse>, Status> {
+        self.writable()?;
         let name = req.into_inner().name;
         let cols = self.cols.clone();
         spawn_blocking(move || cols.drop_collection(&name)).await.map_err(blocking_err)??;
@@ -440,6 +477,8 @@ pub struct ServeOptions {
     pub api_keys: Option<ApiKeys>,
     /// plain-HTTP Prometheus endpoint, `GET /metrics`
     pub metrics_addr: Option<SocketAddr>,
+    /// refuse every write RPC (set on replicas)
+    pub read_only: bool,
 }
 
 pub async fn serve_collections(
@@ -459,7 +498,10 @@ pub async fn serve_with(
     opts: ServeOptions,
     shutdown: impl Future<Output = ()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let svc = Arc::new(VectorDbService::new(cols.clone()));
+    let mut service = VectorDbService::new(cols.clone());
+    service.read_only = opts.read_only;
+    let stop = service.stop.clone();
+    let svc = Arc::new(service);
     let durable = cols.get(DEFAULT).is_some_and(|d| d.is_durable());
 
     let (health, health_svc) = tonic_health::server::health_reporter();
@@ -525,7 +567,10 @@ pub async fn serve_with(
         .layer(metrics::MetricsLayer(metrics))
         .add_service(health_svc)
         .add_service(data)
-        .serve_with_shutdown(addr, shutdown)
+        .serve_with_shutdown(addr, async move {
+            shutdown.await;
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        })
         .await?;
 
     if let Some(t) = ticker {

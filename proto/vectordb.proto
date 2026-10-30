@@ -23,6 +23,9 @@ service VectorDb {
   // write a snapshot into the server's data directory
   rpc Snapshot(SnapshotRequest) returns (SnapshotResponse);
 
+  // read-replica feed: the newest snapshot, then the write-ahead log from that snapshot on
+  rpc Replicate(ReplicateRequest) returns (stream ReplicationMessage);
+
   rpc CreateCollection(CreateCollectionRequest) returns (CreateCollectionResponse);
   rpc DropCollection(DropCollectionRequest) returns (DropCollectionResponse);
   rpc ListCollections(ListCollectionsRequest) returns (ListCollectionsResponse);
@@ -291,3 +294,34 @@ message FacetCount {
 message FacetsResponse {
   repeated FacetCount facets = 1;
 }
+
+message ReplicateRequest {}
+
+message ReplicationMessage {
+  oneof kind {
+    Bootstrap bootstrap = 1;
+    // bytes of the snapshot file, snapshot_bytes in total
+    bytes snapshot_chunk = 2;
+    WalChunk wal_chunk = 3;
+    // the log the replica was reading no longer exists: start over from a new snapshot
+    Resync resync = 4;
+  }
+}
+
+message Bootstrap {
+  // postcard-encoded vecdb::Config
+  bytes config = 1;
+  // generation of the snapshot (or of the oldest log when there is none)
+  uint64 generation = 2;
+  bool has_snapshot = 3;
+  uint64 snapshot_bytes = 4;
+}
+
+// raw log bytes; chunk boundaries can fall inside a record
+message WalChunk {
+  uint64 generation = 1;
+  uint64 offset = 2;
+  bytes data = 3;
+}
+
+message Resync {}

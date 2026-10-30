@@ -70,6 +70,17 @@ included; fine while the server runs), `restore` (copy into an empty directory, 
 `export` (JSON lines, one vector per line) and `import` (needs `--dim` etc. only when the
 directory has no snapshot yet). Stop the server before `restore` and `import`, they write files.
 
+Read replicas: start a second server with `--follow http://leader:50051` (plus
+`--follow-api-key` if the leader requires keys). It downloads the leader's newest snapshot,
+then tails the leader's write-ahead log and applies it, for every collection the leader has
+(new ones are picked up within about 10 seconds). It answers reads and refuses writes with
+`FAILED_PRECONDITION`. Limits, on purpose: one leader, no automatic failover, a replica keeps
+everything in memory and re-downloads on restart, replicas can't feed other replicas, and
+the leader needs a data directory. Replication is asynchronous, so a read right after a write
+can still see the old state. A replica that falls more than one checkpoint behind is told to
+start over from a fresh snapshot; the leader keeps the previous log through a checkpoint so
+one that is caught up never has to. Dropped collections are not removed from replicas.
+
 Design write-up with diagrams: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Build and run
@@ -270,7 +281,7 @@ examples/     recall sweep, gRPC client
 
 ## Not done (yet)
 
-No online compaction, single node only. The PQ graph is built on quantised distances (only the final ranking uses full vectors). AVX-512 and NEON kernels are checked by
+Replication is read replicas only (no failover, no sync commit). The PQ graph is built on quantised distances (only the final ranking uses full vectors). AVX-512 and NEON kernels are checked by
 compilation and review against the AVX2 versions, not by execution on this
 machine; the kernel-vs-scalar test runs them wherever the hardware exists (CI
 includes an aarch64 job). Details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#8-known-limits-and-what-comes-next).

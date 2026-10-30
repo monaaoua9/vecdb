@@ -81,7 +81,7 @@ can still see the old state. A replica that falls more than one checkpoint behin
 start over from a fresh snapshot; the leader keeps the previous log through a checkpoint so
 one that is caught up never has to. Dropped collections are not removed from replicas.
 
-Design write-up with diagrams: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Design write-up with diagrams: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The short version of the main decisions: [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Build and run
 
@@ -112,6 +112,8 @@ cargo test                     # kernels vs scalar, recall, concurrency, filteri
                                # persistence/corruption, WAL recovery, gRPC end-to-end,
                                # model-based and fuzz tests (see tests/model.rs, snapshot_fuzz.rs)
 ```
+
+A recent run of the recall sweep and the SIMD kernels, with commands and caveats, is in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 Numbers below are from a laptop (i5-8365U, 4 cores / 8 threads, AVX2, no AVX-512),
 Windows, `cargo build --release`. Treat them as a sanity check, not a leaderboard.
@@ -272,6 +274,7 @@ proto/        vectordb.proto
 tests/        integration tests (+ common/ data generators)
 benches/      criterion benchmarks
 examples/     recall sweep, gRPC client
+docs/         architecture, design decisions, benchmarks
 ```
 
 ## Semantics worth knowing

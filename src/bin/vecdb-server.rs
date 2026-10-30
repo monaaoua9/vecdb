@@ -73,6 +73,12 @@ struct Args {
     #[arg(long)]
     metrics_listen: Option<SocketAddr>,
 
+    /// PEM certificate chain and private key; both together switch the listener to TLS (build with --features tls)
+    #[arg(long, requires = "tls_key")]
+    tls_cert: Option<PathBuf>,
+    #[arg(long, requires = "tls_cert")]
+    tls_key: Option<PathBuf>,
+
     /// how often the running server checks the deleted share, 0 = start-up only
     #[arg(long, default_value_t = 60)]
     compact_check_secs: u64,
@@ -174,7 +180,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
 
     let every = Duration::from_secs(args.snapshot_every_secs);
+    let tls = match (&args.tls_cert, &args.tls_key) {
+        (Some(c), Some(k)) => Some(server::TlsFiles { cert_pem: std::fs::read(c)?, key_pem: std::fs::read(k)? }),
+        _ => None,
+    };
     let opts = server::ServeOptions {
+        tls,
         api_keys: args.api_keys_file.as_deref().map(server::ApiKeys::from_file).transpose()?,
         metrics_addr: args.metrics_listen,
     };

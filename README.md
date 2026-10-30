@@ -54,6 +54,15 @@ variants). `search_text` is keyword-only; `search_hybrid` fuses it with the vect
 reciprocal rank fusion. On gRPC, set `text` on `Search` (with or without a vector). The index is
 not stored in snapshots and is rebuilt from payloads at start-up.
 
+Running it for real: `--api-keys-file keys.txt` (one key per line) makes every data RPC require
+`authorization: Bearer <key>`; the health service stays open for load balancers.
+`--metrics-listen 127.0.0.1:9100` serves Prometheus text on `GET /metrics` (per-RPC counts and
+latency histograms, per-collection vector counts and tombstone ratio).
+`--tls-cert` / `--tls-key` switch the gRPC listener to TLS; that needs a build with
+`--features tls` (rustls + ring), which is off by default. The metrics endpoint is plain HTTP, so
+keep it on localhost or behind your own proxy. `tests/data/localhost.*` is a throwaway
+self-signed test certificate, not for real use.
+
 Design write-up with diagrams: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Build and run

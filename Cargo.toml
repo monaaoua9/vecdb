@@ -25,6 +25,9 @@ server = [
     "dep:tonic-prost-build",
 ]
 
+# TLS pulls in rustls + ring, so it is opt-in
+tls = ["server", "tonic/tls-ring"]
+
 [dependencies]
 bytemuck = { version = "1.25", features = ["derive"] }
 crc32fast = "1.5"

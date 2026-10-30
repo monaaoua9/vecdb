@@ -426,8 +426,16 @@ pub async fn serve(
     serve_collections(cols, addr, snapshot_every, shutdown).await
 }
 
+/// PEM contents of the server certificate chain and its private key
+pub struct TlsFiles {
+    pub cert_pem: Vec<u8>,
+    pub key_pem: Vec<u8>,
+}
+
 #[derive(Default)]
 pub struct ServeOptions {
+    /// needs the `tls` cargo feature
+    pub tls: Option<TlsFiles>,
     /// when set, every data RPC needs `authorization: Bearer <key>` (the health service stays open)
     pub api_keys: Option<ApiKeys>,
     /// plain-HTTP Prometheus endpoint, `GET /metrics`
@@ -497,8 +505,22 @@ pub async fn serve_with(
         },
     );
 
+    let mut builder = tonic::transport::Server::builder();
+    if let Some(t) = opts.tls {
+        #[cfg(feature = "tls")]
+        {
+            use tonic::transport::{Identity, ServerTlsConfig};
+            builder = builder.tls_config(ServerTlsConfig::new().identity(Identity::from_pem(t.cert_pem, t.key_pem)))?;
+        }
+        #[cfg(not(feature = "tls"))]
+        {
+            let _ = t;
+            return Err("this build has no TLS support, rebuild with --features tls".into());
+        }
+    }
+
     tracing::info!(%addr, "listening");
-    tonic::transport::Server::builder()
+    builder
         .layer(metrics::MetricsLayer(metrics))
         .add_service(health_svc)
         .add_service(data)

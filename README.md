@@ -35,7 +35,13 @@ let index = Index::open("snapshot-000000000001.vdb")?; // vectors are mmap'd
 | **Storage** | single-file snapshot, vectors served from `mmap`, CRC-checked header and metadata, atomic write-then-rename |
 | **Filtering** | `Eq`, `AnyOf`, `Range`, `And`, `Or`, `Not` over typed payloads; roaring-bitmap inverted index; planner picks exact pre-filter scan or filtered graph walk, or force either with `FilterStrategy` |
 | **Durability** | `DurableIndex`: snapshot generations + write-ahead log (CRC per record, torn tails truncated, idempotent replay), optional fsync with group commit (concurrent writers share one fsync) |
-| **API** | tonic gRPC: insert, streaming bulk insert, search, get, delete, stats, snapshot, health |
+| **API** | tonic gRPC: named collections, insert, upsert, payload updates, streaming bulk insert, search, get, delete, stats, snapshot, health |
+
+Collections: the index the server starts with is the `default` collection; `CreateCollection`,
+`DropCollection` and `ListCollections` manage others (each with its own dim, metric and
+quantization, stored under `<data-dir>/collections/<name>/`). Data RPCs pick one with the
+`x-collection` request header, no header means `default`, so older clients keep working.
+PQ collections can't be created over RPC because they need a trained codebook.
 
 Design write-up with diagrams: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

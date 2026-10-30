@@ -15,6 +15,7 @@ use crate::store::{Segment, VectorStore};
 mod compact;
 mod graph;
 mod insert;
+mod query;
 mod scratch;
 mod search;
 

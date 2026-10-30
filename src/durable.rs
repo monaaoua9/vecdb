@@ -348,6 +348,22 @@ impl DurableIndex {
         self.index().search_with(query, p)
     }
 
+    pub fn search_batch(&self, queries: &[Vec<f32>], p: &SearchParams, threads: usize) -> Result<Vec<Vec<Hit>>> {
+        self.index().search_batch(queries, p, threads)
+    }
+
+    pub fn search_range(&self, query: &[f32], radius: f32, p: &SearchParams) -> Result<Vec<Hit>> {
+        self.index().search_range(query, radius, p)
+    }
+
+    pub fn recommend(&self, positive: &[u64], negative: &[u64], p: &SearchParams) -> Result<Vec<Hit>> {
+        self.index().recommend(positive, negative, p)
+    }
+
+    pub fn search_mmr(&self, query: &[f32], p: &SearchParams, lambda: f32, fetch: usize) -> Result<Vec<Hit>> {
+        self.index().search_mmr(query, p, lambda, fetch)
+    }
+
     pub fn exact_search(&self, query: &[f32], k: usize) -> Result<Vec<Hit>> {
         self.index().exact_search(query, k)
     }

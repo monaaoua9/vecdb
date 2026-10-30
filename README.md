@@ -116,6 +116,12 @@ cargo test                     # kernels vs scalar, recall, concurrency, filteri
 Numbers below are from a laptop (i5-8365U, 4 cores / 8 threads, AVX2, no AVX-512),
 Windows, `cargo build --release`. Treat them as a sanity check, not a leaderboard.
 
+The machine is weak and never idle: usually several terminals are open at once and the C:
+drive is nearly full, and all of that moves timings, by 2-5x between runs at worst. So every
+number here is a sanity check measured under those conditions. Old-vs-new comparisons were run
+interleaved in one session and read as medians or best-of; a gap smaller than about 25%
+between two builds should not be believed.
+
 **Recall and latency** — 50 000 vectors, 128 dims, cosine, k=10, single query thread,
 recall measured against an exact scan. Data has latent structure (12 hidden factors),
 which is what embedding-model output looks like:

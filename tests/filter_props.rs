@@ -1,6 +1,6 @@
 //! Property check for the filter planner: whatever shape the filter has, every access path
 //! (exact pre-filter scan, count, scroll) must agree with brute-force `Filter::matches`.
-// is_multiple_of needs a newer rust than our msrv
+// plain % reads fine in the test data generators
 #![allow(clippy::manual_is_multiple_of)]
 
 mod common;

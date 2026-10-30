@@ -85,7 +85,7 @@ Design write-up with diagrams: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The
 
 ## Build and run
 
-Needs Rust 1.89+ and `protoc` (only for the server feature).
+Needs Rust 1.95+ and `protoc` (only for the server feature).
 
 ```sh
 cargo build --release                       # library + server

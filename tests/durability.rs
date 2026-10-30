@@ -299,7 +299,7 @@ fn payload_edits_survive_crash() {
     assert_eq!(p["d"], Value::Int(4));
 }
 
-// is_multiple_of needs a newer rust than our msrv
+// plain % reads fine in the test data generators
 #[allow(clippy::manual_is_multiple_of)]
 #[test]
 fn online_compaction_keeps_writes_made_during_the_rebuild() {

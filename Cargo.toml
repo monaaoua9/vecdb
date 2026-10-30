@@ -2,7 +2,7 @@
 name = "vecdb"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.89"
+rust-version = "1.95"
 description = "Embedded vector database: HNSW graph index, SIMD distance kernels, SQ8 quantization, mmap snapshots, gRPC front-end"
 license = "MIT"
 readme = "README.md"

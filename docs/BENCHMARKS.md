@@ -82,3 +82,15 @@ Synthetic data, 50,000 x 128 uniform random, L2, `M=16`, `ef_construction=100`, 
 | new | 8 | 2,622 | 2,194 – 4,388 |
 
 The ranges overlap and the new median is not lower, so no slowdown shows up. An earlier 3-run round had the new build about 10% slower at `ef=64` and equal at `ef=256`; the old build's own spread (about 25%) was larger than that gap. The laptop is busy (several terminals, disk almost full), so don't read anything into a difference under about 25%. Not comparable to the tables above: different data and size.
+
+### The same check on SIFT1M (2026-10-31)
+
+Real SIFT1M, README protocol (L2, `M=16`, `ef_construction=200`, k=10, 8-thread build, one query thread, reloaded from the snapshot in a fresh process, best of 5 passes over 10,000 queries). Old (`7536f7d`) and new each built their own snapshot, then three rounds alternated old / new. QPS per round, median in brackets:
+
+| ef | recall@10 old / new | old QPS | new QPS |
+|---:|---|---|---|
+| 32 | 0.9030 / 0.9031 | 5,415 · 7,195 · 8,625 (7,195) | 8,357 · 7,026 · 6,609 (7,026) |
+| 64 | 0.9634 / 0.9633 | 4,319 · 4,238 · 4,860 (4,319) | 4,714 · 4,234 · 3,598 (4,234) |
+| 128 | 0.9892 / 0.9891 | 2,747 · 2,165 · 2,672 (2,672) | 2,353 · 2,714 · 2,265 (2,353) |
+
+Recall is the same to the fourth digit. The medians differ by 2-12% with the old build ahead, but the rounds of one build alone vary by 20-60%, the ranges overlap everywhere, and the best round of each build is within 3% (8,625 vs 8,357, 4,860 vs 4,714, 2,747 vs 2,714). So no slowdown I can measure; the machine is too noisy to rule out a few percent. Build: 252 s new, 307 s old (the old one built second, so don't read that as a speedup).

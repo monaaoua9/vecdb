@@ -90,7 +90,8 @@ impl TextIndex {
             for (&doc, &tf) in p {
                 let len = self.docs[&doc].0 as f32;
                 let tf = tf as f32;
-                *scores.entry(doc).or_default() += idf * tf * (K1 + 1.0) / (tf + K1 * (1.0 - B + B * len / avg));
+                *scores.entry(doc).or_default() +=
+                    idf * tf * (K1 + 1.0) / (tf + K1 * (1.0 - B + B * len / avg));
             }
         }
         let mut v: Vec<(u32, f32)> = scores.into_iter().filter(|(d, _)| allow(*d)).collect();

@@ -39,7 +39,9 @@ impl Gate<'_> {
         }
         match self {
             Gate::All | Gate::Live => true,
-            Gate::Set { set, verify } => set.contains(id) && verify.is_none_or(|f| f.matches(&n.payload.read())),
+            Gate::Set { set, verify } => {
+                set.contains(id) && verify.is_none_or(|f| f.matches(&n.payload.read()))
+            }
             Gate::Pred(f) => f.matches(&n.payload.read()),
         }
     }

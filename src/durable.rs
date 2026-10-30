@@ -325,7 +325,13 @@ impl DurableIndex {
         Ok(DurableIndex::assemble(index, Some(dir.to_path_buf()), mode, Some(out), snap_gen))
     }
 
-    fn assemble(index: Index, dir: Option<PathBuf>, mode: Durability, wal: Option<Arc<Wal>>, gen_no: u64) -> Self {
+    fn assemble(
+        index: Index,
+        dir: Option<PathBuf>,
+        mode: Durability,
+        wal: Option<Arc<Wal>>,
+        gen_no: u64,
+    ) -> Self {
         DurableIndex {
             epoch: AtomicU64::new(0),
             index: RwLock::new(Arc::new(index)),
@@ -407,7 +413,12 @@ impl DurableIndex {
         self.index().search_with(query, p)
     }
 
-    pub fn search_batch(&self, queries: &[Vec<f32>], p: &SearchParams, threads: usize) -> Result<Vec<Vec<Hit>>> {
+    pub fn search_batch(
+        &self,
+        queries: &[Vec<f32>],
+        p: &SearchParams,
+        threads: usize,
+    ) -> Result<Vec<Vec<Hit>>> {
         self.index().search_batch(queries, p, threads)
     }
 

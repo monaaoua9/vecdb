@@ -52,10 +52,14 @@ impl Metrics {
             let mut cum = 0;
             for (i, b) in BOUNDS.iter().enumerate() {
                 cum += r.buckets[i];
-                out.push_str(&format!("vecdb_rpc_duration_seconds_bucket{{rpc=\"{name}\",le=\"{b}\"}} {cum}\n"));
+                out.push_str(&format!(
+                    "vecdb_rpc_duration_seconds_bucket{{rpc=\"{name}\",le=\"{b}\"}} {cum}\n"
+                ));
             }
             let total = cum + r.buckets[BOUNDS.len()];
-            out.push_str(&format!("vecdb_rpc_duration_seconds_bucket{{rpc=\"{name}\",le=\"+Inf\"}} {total}\n"));
+            out.push_str(&format!(
+                "vecdb_rpc_duration_seconds_bucket{{rpc=\"{name}\",le=\"+Inf\"}} {total}\n"
+            ));
             out.push_str(&format!("vecdb_rpc_duration_seconds_sum{{rpc=\"{name}\"}} {}\n", r.sum));
             out.push_str(&format!("vecdb_rpc_duration_seconds_count{{rpc=\"{name}\"}} {total}\n"));
         }
@@ -64,7 +68,10 @@ impl Metrics {
         out.push_str("# TYPE vecdb_vectors gauge\n# TYPE vecdb_tombstone_ratio gauge\n");
         for (name, idx) in cols.list() {
             out.push_str(&format!("vecdb_vectors{{collection=\"{name}\"}} {}\n", idx.len()));
-            out.push_str(&format!("vecdb_tombstone_ratio{{collection=\"{name}\"}} {}\n", idx.tombstone_ratio()));
+            out.push_str(&format!(
+                "vecdb_tombstone_ratio{{collection=\"{name}\"}} {}\n",
+                idx.tombstone_ratio()
+            ));
         }
         out
     }
@@ -137,7 +144,8 @@ pub async fn serve_http(
             let n = sock.read(&mut buf).await.unwrap_or(0);
             let line = String::from_utf8_lossy(&buf[..n]);
             let reply = if line.starts_with("GET /metrics ") {
-                let body = tokio::task::spawn_blocking(move || metrics.render(&cols)).await.unwrap_or_default();
+                let body =
+                    tokio::task::spawn_blocking(move || metrics.render(&cols)).await.unwrap_or_default();
                 format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()

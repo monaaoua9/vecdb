@@ -181,7 +181,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     match ran {
                         Ok(Ok(true)) => tracing::info!(collection = %name, "online compaction done"),
                         Ok(Ok(false)) => {}
-                        Ok(Err(e)) => tracing::error!(collection = %name, error = %e, "online compaction failed"),
+                        Ok(Err(e)) => {
+                            tracing::error!(collection = %name, error = %e, "online compaction failed")
+                        }
                         Err(e) => tracing::error!(error = %e, "compaction worker died"),
                     }
                 }
@@ -211,7 +213,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let every = Duration::from_secs(args.snapshot_every_secs);
     let tls = match (&args.tls_cert, &args.tls_key) {
-        (Some(c), Some(k)) => Some(server::TlsFiles { cert_pem: std::fs::read(c)?, key_pem: std::fs::read(k)? }),
+        (Some(c), Some(k)) => {
+            Some(server::TlsFiles { cert_pem: std::fs::read(c)?, key_pem: std::fs::read(k)? })
+        }
         _ => None,
     };
     let opts = server::ServeOptions {

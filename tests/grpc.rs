@@ -151,23 +151,29 @@ async fn upsert_and_payload_updates_over_grpc() {
     let mut c = connect(addr).await;
     let fields = |k: &str, v: i64| pb::Payload { fields: HashMap::from([(k.to_string(), val_int(v))]) };
 
-    c.upsert(pb::InsertRequest { id: 1, vector: vec![1.0, 1.0], payload: Some(fields("a", 1)) }).await.unwrap();
-    c.upsert(pb::InsertRequest { id: 1, vector: vec![2.0, 2.0], payload: Some(fields("a", 2)) }).await.unwrap();
+    c.upsert(pb::InsertRequest { id: 1, vector: vec![1.0, 1.0], payload: Some(fields("a", 1)) })
+        .await
+        .unwrap();
+    c.upsert(pb::InsertRequest { id: 1, vector: vec![2.0, 2.0], payload: Some(fields("a", 2)) })
+        .await
+        .unwrap();
     let g = c.get(pb::GetRequest { id: 1 }).await.unwrap().into_inner();
     assert_eq!(g.vector, vec![2.0, 2.0]);
 
-    c.update_payload(pb::UpdatePayloadRequest { id: 1, payload: Some(fields("b", 3)), merge: true }).await.unwrap();
+    c.update_payload(pb::UpdatePayloadRequest { id: 1, payload: Some(fields("b", 3)), merge: true })
+        .await
+        .unwrap();
     let p = c.get(pb::GetRequest { id: 1 }).await.unwrap().into_inner().payload.unwrap();
     assert_eq!(p.fields.len(), 2);
 
-    c.update_payload(pb::UpdatePayloadRequest { id: 1, payload: Some(fields("c", 4)), merge: false }).await.unwrap();
+    c.update_payload(pb::UpdatePayloadRequest { id: 1, payload: Some(fields("c", 4)), merge: false })
+        .await
+        .unwrap();
     let p = c.get(pb::GetRequest { id: 1 }).await.unwrap().into_inner().payload.unwrap();
     assert_eq!(p.fields.len(), 1);
 
-    let err = c
-        .update_payload(pb::UpdatePayloadRequest { id: 99, payload: None, merge: true })
-        .await
-        .unwrap_err();
+    let err =
+        c.update_payload(pb::UpdatePayloadRequest { id: 99, payload: None, merge: true }).await.unwrap_err();
     assert_eq!(err.code(), tonic::Code::NotFound);
 
     stop_tx.send(()).unwrap();
@@ -183,7 +189,8 @@ fn to<T>(msg: T, collection: &str) -> tonic::Request<T> {
 #[tokio::test]
 async fn collections_over_grpc() {
     let dir = tempfile::tempdir().unwrap();
-    let index = Arc::new(DurableIndex::open(dir.path(), Config::new(4, Metric::L2), Durability::Flush).unwrap());
+    let index =
+        Arc::new(DurableIndex::open(dir.path(), Config::new(4, Metric::L2), Durability::Flush).unwrap());
     let addr = free_addr();
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
     let srv = tokio::spawn(server::serve(index, addr, Duration::ZERO, async {
@@ -228,10 +235,7 @@ async fn collections_over_grpc() {
     assert_eq!(names, [("default", 4, 1), ("docs", 2, 1)]);
 
     c.drop_collection(pb::DropCollectionRequest { name: "docs".into() }).await.unwrap();
-    assert_eq!(
-        c.get(to(pb::GetRequest { id: 1 }, "docs")).await.unwrap_err().code(),
-        tonic::Code::NotFound
-    );
+    assert_eq!(c.get(to(pb::GetRequest { id: 1 }, "docs")).await.unwrap_err().code(), tonic::Code::NotFound);
     let default = c.drop_collection(pb::DropCollectionRequest { name: "default".into() }).await.unwrap_err();
     assert_eq!(default.code(), tonic::Code::InvalidArgument);
 
@@ -266,7 +270,8 @@ async fn batch_range_mmr_and_recommend_over_grpc() {
     let too_many = pb::BatchSearchRequest { queries: vec![q(1.0); 257] };
     assert_eq!(c.search_batch(too_many).await.unwrap_err().code(), tonic::Code::InvalidArgument);
 
-    let ranged = pb::SearchRequest { vector: vec![40.0, 0.0], k: 50, radius: Some(4.0), ..Default::default() };
+    let ranged =
+        pb::SearchRequest { vector: vec![40.0, 0.0], k: 50, radius: Some(4.0), ..Default::default() };
     assert_eq!(c.search(ranged).await.unwrap().into_inner().hits.len(), 5);
 
     let both = pb::SearchRequest { radius: Some(1.0), mmr_lambda: Some(0.5), ..q(1.0) };
@@ -301,7 +306,10 @@ async fn count_scroll_and_facets_over_grpc() {
     }));
     let mut c = connect(addr).await;
     let only_a = || pb::Filter {
-        kind: Some(pb::filter::Kind::Match(pb::FieldMatch { field: "kind".into(), value: Some(val_str("a")) })),
+        kind: Some(pb::filter::Kind::Match(pb::FieldMatch {
+            field: "kind".into(),
+            value: Some(val_str("a")),
+        })),
     };
 
     assert_eq!(c.count(pb::CountRequest { filter: None }).await.unwrap().into_inner().count, 60);
@@ -332,7 +340,11 @@ async fn count_scroll_and_facets_over_grpc() {
     let too_big = c.scroll(pb::ScrollRequest { limit: 10_001, ..Default::default() }).await.unwrap_err();
     assert_eq!(too_big.code(), tonic::Code::InvalidArgument);
 
-    let f = c.facets(pb::FacetsRequest { field: "kind".into(), ..Default::default() }).await.unwrap().into_inner();
+    let f = c
+        .facets(pb::FacetsRequest { field: "kind".into(), ..Default::default() })
+        .await
+        .unwrap()
+        .into_inner();
     assert_eq!(f.facets.len(), 2);
     assert_eq!(f.facets[0].count, 40);
     assert_eq!(f.facets[1].count, 20);
@@ -368,7 +380,12 @@ async fn text_and_hybrid_search_over_grpc() {
     let hits = c.search(text_only).await.unwrap().into_inner().hits;
     assert_eq!(hits.iter().map(|h| h.id).collect::<Vec<_>>(), [2]);
 
-    let hybrid = pb::SearchRequest { vector: vec![0.0, 0.0], text: Some("epsilon".into()), k: 3, ..Default::default() };
+    let hybrid = pb::SearchRequest {
+        vector: vec![0.0, 0.0],
+        text: Some("epsilon".into()),
+        k: 3,
+        ..Default::default()
+    };
     let ids: Vec<u64> = c.search(hybrid).await.unwrap().into_inner().hits.iter().map(|h| h.id).collect();
     assert!(ids.contains(&2) && ids.contains(&0));
 
@@ -395,7 +412,8 @@ async fn plain_server(opts: server::ServeOptions) -> (std::net::SocketAddr, ones
 #[tokio::test]
 async fn api_keys_gate_the_data_rpcs() {
     let keys = server::ApiKeys::new(["s3cret".to_string()]);
-    let (addr, stop) = plain_server(server::ServeOptions { api_keys: Some(keys), ..Default::default() }).await;
+    let (addr, stop) =
+        plain_server(server::ServeOptions { api_keys: Some(keys), ..Default::default() }).await;
     let mut c = connect(addr).await;
     let ins = || pb::InsertRequest { id: 1, vector: vec![1.0, 2.0], payload: None };
 
@@ -410,7 +428,8 @@ async fn api_keys_gate_the_data_rpcs() {
     c.insert(good).await.unwrap();
 
     // health checks stay reachable for load balancers
-    let chan = tonic::transport::Channel::from_shared(format!("http://{addr}")).unwrap().connect().await.unwrap();
+    let chan =
+        tonic::transport::Channel::from_shared(format!("http://{addr}")).unwrap().connect().await.unwrap();
     let mut h = tonic_health::pb::health_client::HealthClient::new(chan);
     h.check(tonic_health::pb::HealthCheckRequest { service: String::new() }).await.unwrap();
 

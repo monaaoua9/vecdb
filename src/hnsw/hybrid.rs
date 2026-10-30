@@ -66,7 +66,8 @@ impl Index {
         };
         let allow = |id: u32| {
             let Some(n) = self.nodes.get(id as usize) else { return false };
-            !n.deleted.load(Ordering::Relaxed) && p.filter.as_ref().is_none_or(|f| f.matches(&n.payload.read()))
+            !n.deleted.load(Ordering::Relaxed)
+                && p.filter.as_ref().is_none_or(|f| f.matches(&n.payload.read()))
         };
         Ok(t.search(query, limit, allow)
             .into_iter()

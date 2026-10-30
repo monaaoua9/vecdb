@@ -163,7 +163,8 @@ async fn replica_server_refuses_writes_but_serves_reads() {
     assert_eq!(c.create_collection(make).await.unwrap_err().code(), tonic::Code::FailedPrecondition);
 
     assert_eq!(c.get(pb::GetRequest { id: 1 }).await.unwrap().into_inner().vector, vec![1.0, 1.0]);
-    let hits = c.search(pb::SearchRequest { vector: vec![1.0, 1.0], k: 1, ..Default::default() }).await.unwrap();
+    let hits =
+        c.search(pb::SearchRequest { vector: vec![1.0, 1.0], k: 1, ..Default::default() }).await.unwrap();
     assert_eq!(hits.into_inner().hits[0].id, 1);
     let _ = stop.send(());
 }

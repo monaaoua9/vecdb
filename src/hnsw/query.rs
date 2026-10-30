@@ -12,7 +12,12 @@ use crate::store::VectorRef;
 impl Index {
     /// Runs every query with the same params, spread over `threads` workers.
     /// Results come back in query order; the first error wins.
-    pub fn search_batch(&self, queries: &[Vec<f32>], p: &SearchParams, threads: usize) -> Result<Vec<Vec<Hit>>> {
+    pub fn search_batch(
+        &self,
+        queries: &[Vec<f32>],
+        p: &SearchParams,
+        threads: usize,
+    ) -> Result<Vec<Vec<Hit>>> {
         let next = AtomicUsize::new(0);
         let done: Mutex<Vec<(usize, Result<Vec<Hit>>)>> = Mutex::new(Vec::with_capacity(queries.len()));
         std::thread::scope(|sc| {

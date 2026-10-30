@@ -81,7 +81,8 @@ fn every_path_agrees_with_brute_force() {
 
         for strategy in [FilterStrategy::PreFilter, FilterStrategy::Auto] {
             let p = SearchParams::new(N as usize).filter(f.clone()).strategy(strategy);
-            let hits: BTreeSet<u64> = idx.search_with(&[10.0, 3.0], &p).unwrap().iter().map(|h| h.id).collect();
+            let hits: BTreeSet<u64> =
+                idx.search_with(&[10.0, 3.0], &p).unwrap().iter().map(|h| h.id).collect();
             assert_eq!(hits, want, "{strategy:?}, round {round}: {f:?}");
         }
     }

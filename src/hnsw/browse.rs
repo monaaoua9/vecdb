@@ -26,7 +26,9 @@ impl Index {
         match self.pidx.plan(f) {
             Some((set, true)) => set.len() as usize,
             Some((set, false)) => set.iter().filter(|&id| self.live_matches(id, f)).count(),
-            None => (0..self.next_id.load(Ordering::Acquire) as u32).filter(|&id| self.live_matches(id, f)).count(),
+            None => (0..self.next_id.load(Ordering::Acquire) as u32)
+                .filter(|&id| self.live_matches(id, f))
+                .count(),
         }
     }
 
@@ -77,7 +79,9 @@ impl Index {
         let allowed: Option<RoaringBitmap> = filter.map(|f| match self.pidx.plan(f) {
             Some((set, true)) => set,
             Some((set, false)) => set.iter().filter(|&id| self.live_matches(id, f)).collect(),
-            None => (0..self.next_id.load(Ordering::Acquire) as u32).filter(|&id| self.live_matches(id, f)).collect(),
+            None => (0..self.next_id.load(Ordering::Acquire) as u32)
+                .filter(|&id| self.live_matches(id, f))
+                .collect(),
         });
         let mut out: Vec<(Value, usize)> = self
             .pidx

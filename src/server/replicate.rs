@@ -39,7 +39,11 @@ pub(super) struct WalTail {
 }
 
 pub(super) enum Tail {
-    Data { generation: u64, offset: u64, bytes: Vec<u8> },
+    Data {
+        generation: u64,
+        offset: u64,
+        bytes: Vec<u8>,
+    },
     Idle,
     /// the log we were reading was deleted by a checkpoint
     Lost,
@@ -260,7 +264,12 @@ async fn sync_once(
         Index::new(cfg)?
     };
     let target = cols.install(name, index);
-    tracing::info!(collection = name, generation = b.generation, vectors = target.len(), "replica loaded snapshot");
+    tracing::info!(
+        collection = name,
+        generation = b.generation,
+        vectors = target.len(),
+        "replica loaded snapshot"
+    );
 
     let (mut generation, mut consumed, mut buf) = (b.generation, 0u64, Vec::<u8>::new());
     while !stop.load(Ordering::Relaxed) {
@@ -288,7 +297,9 @@ async fn sync_once(
                 })
                 .await??;
             }
-            Some(Kind::Resync(_)) => return Err("fell behind the leader's log, loading a new snapshot".into()),
+            Some(Kind::Resync(_)) => {
+                return Err("fell behind the leader's log, loading a new snapshot".into());
+            }
             _ => return Err("unexpected message from the leader".into()),
         }
     }

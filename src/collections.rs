@@ -112,7 +112,9 @@ impl Collections {
             return Err(Error::InvalidName(name.to_owned()));
         }
         if matches!(cfg.quantization, Quantization::Pq { .. }) {
-            return Err(Error::InvalidConfig("pq collections need a trained codebook, create them from code".into()));
+            return Err(Error::InvalidConfig(
+                "pq collections need a trained codebook, create them from code".into(),
+            ));
         }
         cfg.validate()?;
 

@@ -210,7 +210,9 @@ pub fn open_dir(dir: &Path, fallback: Option<Config>) -> Result<DurableIndex> {
         (None, Some(c)) => c,
         (None, None) if snapshots::latest(dir).is_some() => Config::new(1, Metric::L2), // unused, snapshot wins
         (None, None) => {
-            return Err(Error::InvalidConfig("no snapshot in this directory, say what the index looks like".into()));
+            return Err(Error::InvalidConfig(
+                "no snapshot in this directory, say what the index looks like".into(),
+            ));
         }
     };
     DurableIndex::open(dir, cfg, Durability::Flush)
@@ -239,7 +241,9 @@ fn value_json(v: &Value) -> Result<serde_json::Value> {
     Ok(match v {
         Value::Bool(b) => (*b).into(),
         Value::Int(i) => (*i).into(),
-        Value::Float(f) => serde_json::Number::from_f64(*f).ok_or_else(|| bad("NaN or infinite payload float"))?.into(),
+        Value::Float(f) => {
+            serde_json::Number::from_f64(*f).ok_or_else(|| bad("NaN or infinite payload float"))?.into()
+        }
         Value::Str(s) => s.as_str().into(),
     })
 }
@@ -251,7 +255,8 @@ pub fn export_jsonl(index: &DurableIndex, mut w: impl Write) -> Result<usize> {
     loop {
         let page = index.scroll(None, cursor, PAGE, true);
         for r in &page.items {
-            let payload = r.payload.iter().map(|(k, v)| Ok((k.clone(), value_json(v)?))).collect::<Result<_>>()?;
+            let payload =
+                r.payload.iter().map(|(k, v)| Ok((k.clone(), value_json(v)?))).collect::<Result<_>>()?;
             serde_json::to_writer(&mut w, &OutLine { id: r.id, vector: &r.vector, payload }).map_err(bad)?;
             w.write_all(b"\n")?;
             n += 1;
@@ -272,9 +277,15 @@ fn payload_from(m: serde_json::Map<String, serde_json::Value>, line: usize) -> R
                 J::String(s) => Value::Str(s),
                 J::Number(n) => match n.as_i64() {
                     Some(i) => Value::Int(i),
-                    None => Value::Float(n.as_f64().ok_or_else(|| bad(format!("line {line}: unusable number in {k:?}")))?),
+                    None => Value::Float(
+                        n.as_f64().ok_or_else(|| bad(format!("line {line}: unusable number in {k:?}")))?,
+                    ),
                 },
-                _ => return Err(bad(format!("line {line}: payload field {k:?} must be a bool, number or string"))),
+                _ => {
+                    return Err(bad(format!(
+                        "line {line}: payload field {k:?} must be a bool, number or string"
+                    )));
+                }
             };
             Ok((k, v))
         })

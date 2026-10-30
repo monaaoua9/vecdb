@@ -11,8 +11,8 @@ use crate::collections::{Collections, DEFAULT};
 use crate::config::Config;
 use crate::distance::Metric;
 use crate::durable::DurableIndex;
-use crate::quant::Quantization;
 use crate::hnsw::{Item, SearchParams};
+use crate::quant::Quantization;
 
 mod auth;
 mod convert;
@@ -63,9 +63,7 @@ impl VectorDbService {
             Some(v) => v.to_str().map_err(|_| Status::invalid_argument("x-collection is not ascii"))?,
             None => DEFAULT,
         };
-        self.cols
-            .get(name)
-            .ok_or_else(|| Status::not_found(format!("collection {name} not found")))
+        self.cols.get(name).ok_or_else(|| Status::not_found(format!("collection {name} not found")))
     }
 
     /// Snapshots every durable collection, returns (name, path, vectors) for each.
@@ -84,12 +82,7 @@ impl VectorDbService {
     }
 }
 
-fn search_params(
-    k: u32,
-    ef: u32,
-    filter: Option<pb::Filter>,
-    strategy: i32,
-) -> Result<SearchParams, Status> {
+fn search_params(k: u32, ef: u32, filter: Option<pb::Filter>, strategy: i32) -> Result<SearchParams, Status> {
     let k = k as usize;
     if k == 0 || k > MAX_K {
         return Err(Status::invalid_argument(format!("k must be in 1..={MAX_K}")));
@@ -268,7 +261,10 @@ impl VectorDb for VectorDbService {
         Ok(Response::new(pb::BatchSearchResponse { results }))
     }
 
-    async fn recommend(&self, req: Request<pb::RecommendRequest>) -> Result<Response<pb::SearchResponse>, Status> {
+    async fn recommend(
+        &self,
+        req: Request<pb::RecommendRequest>,
+    ) -> Result<Response<pb::SearchResponse>, Status> {
         let index = self.col(&req)?;
         let r = req.into_inner();
         let params = search_params(r.k, r.ef, r.filter, r.strategy)?;
@@ -296,7 +292,9 @@ impl VectorDb for VectorDbService {
         let r = req.into_inner();
         let limit = match r.limit as usize {
             0 => 100,
-            n if n > MAX_SCROLL => return Err(Status::invalid_argument(format!("limit is at most {MAX_SCROLL}"))),
+            n if n > MAX_SCROLL => {
+                return Err(Status::invalid_argument(format!("limit is at most {MAX_SCROLL}")));
+            }
             n => n,
         };
         let filter = r.filter.map(convert::filter_in).transpose()?;
@@ -396,7 +394,9 @@ impl VectorDb for VectorDbService {
         let index = self.col(&req)?;
         let dir = index
             .dir()
-            .ok_or_else(|| Status::failed_precondition("only a server with a data directory can feed replicas"))?
+            .ok_or_else(|| {
+                Status::failed_precondition("only a server with a data directory can feed replicas")
+            })?
             .to_path_buf();
         let config = postcard::to_stdvec(&index.config()).map_err(|e| Status::internal(e.to_string()))?;
         let (tx, rx) = tokio::sync::mpsc::channel(8);
@@ -553,7 +553,8 @@ pub async fn serve_with(
         #[cfg(feature = "tls")]
         {
             use tonic::transport::{Identity, ServerTlsConfig};
-            builder = builder.tls_config(ServerTlsConfig::new().identity(Identity::from_pem(t.cert_pem, t.key_pem)))?;
+            builder = builder
+                .tls_config(ServerTlsConfig::new().identity(Identity::from_pem(t.cert_pem, t.key_pem)))?;
         }
         #[cfg(not(feature = "tls"))]
         {

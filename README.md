@@ -63,6 +63,13 @@ latency histograms, per-collection vector counts and tombstone ratio).
 keep it on localhost or behind your own proxy. `tests/data/localhost.*` is a throwaway
 self-signed test certificate, not for real use.
 
+`vecdb-cli` works on a data directory without the server: `inspect` and `verify` (snapshot CRCs,
+log scan; a torn tail on the newest log is a warning, damage anywhere else is a problem and a
+non-zero exit), `backup` (copies the newest snapshot plus the logs on top of it, collections
+included; fine while the server runs), `restore` (copy into an empty directory, then verify),
+`export` (JSON lines, one vector per line) and `import` (needs `--dim` etc. only when the
+directory has no snapshot yet). Stop the server before `restore` and `import`, they write files.
+
 Design write-up with diagrams: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Build and run

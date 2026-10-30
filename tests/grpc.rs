@@ -340,3 +340,41 @@ async fn count_scroll_and_facets_over_grpc() {
     stop_tx.send(()).unwrap();
     srv.await.unwrap().unwrap();
 }
+
+#[tokio::test]
+async fn text_and_hybrid_search_over_grpc() {
+    let mut cfg = Config::new(2, Metric::L2);
+    cfg.max_elements = 50;
+    let index = Arc::new(DurableIndex::in_memory(Index::new(cfg).unwrap()));
+    let doc = |t: &str| {
+        let mut p = vecdb::Payload::new();
+        p.insert("body".into(), vecdb::Value::Str(t.into()));
+        p
+    };
+    index.insert(0, &[0.0, 0.0], doc("alpha beta")).unwrap();
+    index.insert(1, &[1.0, 0.0], doc("gamma")).unwrap();
+    index.insert(2, &[90.0, 0.0], doc("delta epsilon")).unwrap();
+
+    let cols = Arc::new(vecdb::Collections::new(index));
+    cols.set_text_field("body");
+    let addr = free_addr();
+    let (stop_tx, stop_rx) = oneshot::channel::<()>();
+    let srv = tokio::spawn(server::serve_collections(cols, addr, Duration::ZERO, async {
+        let _ = stop_rx.await;
+    }));
+    let mut c = connect(addr).await;
+
+    let text_only = pb::SearchRequest { text: Some("epsilon".into()), k: 3, ..Default::default() };
+    let hits = c.search(text_only).await.unwrap().into_inner().hits;
+    assert_eq!(hits.iter().map(|h| h.id).collect::<Vec<_>>(), [2]);
+
+    let hybrid = pb::SearchRequest { vector: vec![0.0, 0.0], text: Some("epsilon".into()), k: 3, ..Default::default() };
+    let ids: Vec<u64> = c.search(hybrid).await.unwrap().into_inner().hits.iter().map(|h| h.id).collect();
+    assert!(ids.contains(&2) && ids.contains(&0));
+
+    let bad = pb::SearchRequest { text: Some("x".into()), radius: Some(1.0), k: 1, ..Default::default() };
+    assert_eq!(c.search(bad).await.unwrap_err().code(), tonic::Code::InvalidArgument);
+
+    stop_tx.send(()).unwrap();
+    srv.await.unwrap().unwrap();
+}

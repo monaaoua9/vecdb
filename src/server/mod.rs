@@ -105,11 +105,18 @@ async fn run_search(index: Arc<DurableIndex>, r: pb::SearchRequest) -> Result<pb
     }
     let params = search_params(r.k, r.ef, r.filter, r.strategy)?;
     let with_payload = r.with_payload;
+    if r.text.is_some() && (r.radius.is_some() || r.mmr_lambda.is_some()) {
+        return Err(Status::invalid_argument("text can't be combined with radius or mmr_lambda"));
+    }
     let fetch = if r.mmr_fetch > 0 { r.mmr_fetch as usize } else { params.k * 4 };
 
     let t0 = Instant::now();
     let hits = spawn_blocking(move || {
         let hits = match (r.radius, r.mmr_lambda) {
+            _ if r.text.is_some() => match (r.vector.is_empty(), r.text.as_deref().unwrap()) {
+                (true, t) => index.search_text(t, &params)?,
+                (false, t) => index.search_hybrid(&r.vector, t, &params)?,
+            },
             (Some(radius), _) => index.search_range(&r.vector, radius, &params)?,
             (_, Some(lambda)) => index.search_mmr(&r.vector, &params, lambda, fetch)?,
             _ => index.search_with(&r.vector, &params)?,

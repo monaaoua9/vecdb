@@ -25,6 +25,7 @@ pub struct Collections {
     root: Option<PathBuf>,
     mode: Durability,
     map: RwLock<BTreeMap<String, Arc<DurableIndex>>>,
+    text_field: RwLock<Option<String>>,
 }
 
 fn valid_name(n: &str) -> bool {
@@ -37,7 +38,23 @@ impl Collections {
             root: default.dir().map(|d| d.join(SUBDIR)),
             mode: default.durability(),
             map: RwLock::new(BTreeMap::from([(DEFAULT.to_owned(), default)])),
+            text_field: RwLock::new(None),
         }
+    }
+
+    /// Enables BM25 on this payload field for every collection, existing and future.
+    pub fn set_text_field(&self, field: &str) {
+        *self.text_field.write() = Some(field.to_owned());
+        for (_, idx) in self.list() {
+            idx.enable_text_index(field);
+        }
+    }
+
+    fn with_text(&self, idx: DurableIndex) -> Arc<DurableIndex> {
+        if let Some(f) = self.text_field.read().as_deref() {
+            idx.enable_text_index(f);
+        }
+        Arc::new(idx)
     }
 
     /// Opens every collection found on disk. Call once, before serving.
@@ -63,7 +80,7 @@ impl Collections {
             };
             let cfg: Config = postcard::from_bytes(&raw)?;
             let idx = DurableIndex::open(&dir, cfg, self.mode)?;
-            self.map.write().insert(name, Arc::new(idx));
+            self.map.write().insert(name, self.with_text(idx));
             n += 1;
         }
         Ok(n)
@@ -105,7 +122,7 @@ impl Collections {
             }
             None => DurableIndex::in_memory(Index::new(cfg)?),
         };
-        let idx = Arc::new(idx);
+        let idx = self.with_text(idx);
         map.insert(name.to_owned(), idx.clone());
         Ok(idx)
     }

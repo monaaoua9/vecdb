@@ -118,6 +118,10 @@ message SearchRequest {
   optional float mmr_lambda = 8;
   // candidates considered by mmr, 0 = 4 * k
   uint32 mmr_fetch = 9;
+  // keywords for BM25 over the collection's text field (server needs --text-field).
+  // text alone = keyword search, text + vector = hybrid (reciprocal rank fusion);
+  // distance is then a negated score, not a geometric distance
+  optional string text = 10;
 }
 
 message BatchSearchRequest {

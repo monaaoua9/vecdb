@@ -61,6 +61,10 @@ struct Args {
     #[arg(long, default_value_t = 0.3)]
     compact_above: f64,
 
+    /// payload field (string) to build a BM25 keyword index on, enables `text` in Search
+    #[arg(long)]
+    text_field: Option<String>,
+
     /// how often the running server checks the deleted share, 0 = start-up only
     #[arg(long, default_value_t = 60)]
     compact_check_secs: u64,
@@ -121,6 +125,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing::info!(kernel = index.stats().kernel, dim = index.config().dim, "index ready");
     let cols = Arc::new(Collections::new(index));
     let extra = cols.load_existing()?;
+    if let Some(f) = &args.text_field {
+        cols.set_text_field(f);
+    }
     if extra > 0 {
         tracing::info!(extra, "collections loaded");
     }

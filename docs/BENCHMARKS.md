@@ -63,14 +63,15 @@ The scalar baseline is already auto-vectorised to SSE2 by LLVM, so this is AVX2 
 
 ## SIFT1M
 
-The README has SIFT1M results (recall vs latency for f32, SQ8 and PQ32 + rerank) and a comparison harness against hnswlib (`benches/compare/hnswlib_sift.cpp`). I did not rerun those today: building the index takes minutes and needs the dataset. Treat the README numbers as an earlier run on the same machine.
+The README has SIFT1M results (recall vs latency for f32, SQ8 and PQ32 + rerank) and a comparison harness against hnswlib (`benches/compare/hnswlib_sift.cpp`). The f32 sweep was rerun on 2026-10-31 as an old-vs-new check, at the end of this page: recall unchanged, speed within noise of the build before the feature work. SQ8, PQ and the hnswlib side were not rerun; treat those README numbers as an earlier run on the same machine.
 
 ## Limits of these numbers
 
-- Single machine. Latency moves up to about 35% between runs (ef=64 f32 p50 went from 180 to 244 µs), so don't read differences under that as real.
+- Single, weak machine that is never idle: an i5-8365U with 8 GB, several terminals open at once and a nearly full C: drive. Latency moves up to about 35% between runs of the same build (ef=64 f32 p50 went from 180 to 244 µs) and, in the SIFT1M rounds below, 20-60% between rounds. Don't read differences under about 25% as real; compare builds interleaved in one session and use medians or best-of.
 - Query set drawn from the same distribution as the data.
 - No comparison against another engine in this file.
-- The AVX-512 and NEON kernels are not exercised here (this CPU has neither).
+- The AVX-512 and NEON kernels are not exercised here (this CPU has neither); CI runs the kernel and recall tests on aarch64 but publishes no timings.
+- Not benchmarked at all: hybrid (BM25 + vector) search, filtered search at different selectivities, online compaction cost, replication lag, multi-client load. They have correctness tests, not numbers.
 
 ## Did the feature work slow search down? (2026-10-30)
 

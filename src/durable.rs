@@ -377,6 +377,18 @@ impl DurableIndex {
         self.index().facets(field, filter, limit)
     }
 
+    pub fn enable_text_index(&self, field: &str) {
+        self.index().enable_text_index(field)
+    }
+
+    pub fn search_text(&self, query: &str, p: &SearchParams) -> Result<Vec<Hit>> {
+        self.index().search_text(query, p)
+    }
+
+    pub fn search_hybrid(&self, query: &[f32], text: &str, p: &SearchParams) -> Result<Vec<Hit>> {
+        self.index().search_hybrid(query, text, p)
+    }
+
     pub fn exact_search(&self, query: &[f32], k: usize) -> Result<Vec<Hit>> {
         self.index().exact_search(query, k)
     }

@@ -43,6 +43,9 @@ impl Index {
             }
         }
         out.insert_bulk(&chunk, threads)?;
+        if let Some((field, _)) = self.text.read().as_ref() {
+            out.enable_text_index(field);
+        }
         Ok(out)
     }
 }

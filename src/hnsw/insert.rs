@@ -47,6 +47,7 @@ impl Index {
         // only now does the filter planner learn about the node
         let node = self.nodes.get(id as usize).unwrap();
         self.pidx.add(id, &node.payload.read());
+        self.reindex_text(id, &node.payload.read());
         self.live.fetch_add(1, Ordering::Relaxed);
     }
 

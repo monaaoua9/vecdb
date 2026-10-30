@@ -6,6 +6,7 @@ pub mod filter;
 pub mod pq;
 pub mod quant;
 pub mod store;
+pub mod text;
 
 mod durable;
 mod hnsw;

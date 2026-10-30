@@ -11,10 +11,12 @@ use crate::filter::{Filter, FilterStrategy, Payload, PayloadIndex};
 use crate::pq::Codebook;
 use crate::quant::Quantization;
 use crate::store::{Segment, VectorStore};
+use crate::text::TextIndex;
 
 mod browse;
 mod compact;
 mod graph;
+mod hybrid;
 mod insert;
 mod query;
 mod scratch;
@@ -101,6 +103,8 @@ pub struct Index {
     // lets unfiltered searches skip the per-candidate node lookup while nothing is deleted
     pub(crate) tombstones: AtomicUsize,
     pub(crate) pidx: PayloadIndex,
+    // (field, bm25 index) once `enable_text_index` was called; not persisted
+    pub(crate) text: RwLock<Option<(String, TextIndex)>>,
     // writers (insert/delete) hold this shared, save() takes it exclusive
     pub(crate) gate: RwLock<()>,
     rng: AtomicU64,
@@ -169,6 +173,7 @@ impl Index {
             live: AtomicUsize::new(0),
             tombstones: AtomicUsize::new(0),
             pidx: PayloadIndex::default(),
+            text: RwLock::new(None),
             gate: RwLock::new(()),
             rng: AtomicU64::new(cfg.seed),
             level_mult: 1.0 / (cfg.m as f64).ln(),
@@ -227,6 +232,9 @@ impl Index {
         };
         if !node.deleted.swap(true, Ordering::AcqRel) {
             self.pidx.remove(id, &node.payload.read());
+            if let Some((_, t)) = self.text.write().as_mut() {
+                t.remove(id);
+            }
             self.live.fetch_sub(1, Ordering::Relaxed);
             self.tombstones.fetch_add(1, Ordering::Relaxed);
         }
@@ -256,8 +264,18 @@ impl Index {
         self.pidx.remove(id, &cur);
         let next = f(std::mem::take(&mut *cur));
         self.pidx.add(id, &next);
+        self.reindex_text(id, &next);
         *cur = next;
         Ok(())
+    }
+
+    pub(crate) fn reindex_text(&self, id: u32, payload: &Payload) {
+        if let Some((field, t)) = self.text.write().as_mut() {
+            t.remove(id);
+            if let Some(crate::filter::Value::Str(s)) = payload.get(field.as_str()) {
+                t.add(id, s);
+            }
+        }
     }
 
     pub fn stats(&self) -> Stats {

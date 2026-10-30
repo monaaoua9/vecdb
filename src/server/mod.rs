@@ -55,6 +55,29 @@ impl VectorDb for VectorDbService {
         Ok(Response::new(pb::InsertResponse {}))
     }
 
+    async fn upsert(&self, req: Request<pb::InsertRequest>) -> Result<Response<pb::InsertResponse>, Status> {
+        let r = req.into_inner();
+        let payload = convert::payload_in(r.payload)?;
+        let index = self.index.clone();
+        spawn_blocking(move || index.upsert(r.id, &r.vector, payload)).await.map_err(blocking_err)??;
+        Ok(Response::new(pb::InsertResponse {}))
+    }
+
+    async fn update_payload(
+        &self,
+        req: Request<pb::UpdatePayloadRequest>,
+    ) -> Result<Response<pb::UpdatePayloadResponse>, Status> {
+        let r = req.into_inner();
+        let payload = convert::payload_in(r.payload)?;
+        let index = self.index.clone();
+        spawn_blocking(move || {
+            if r.merge { index.merge_payload(r.id, payload) } else { index.set_payload(r.id, payload) }
+        })
+        .await
+        .map_err(blocking_err)??;
+        Ok(Response::new(pb::UpdatePayloadResponse {}))
+    }
+
     async fn insert_stream(
         &self,
         req: Request<Streaming<pb::InsertRequest>>,

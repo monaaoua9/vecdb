@@ -139,3 +139,37 @@ async fn snapshot_without_data_dir_is_rejected() {
     stop_tx.send(()).unwrap();
     srv.await.unwrap().unwrap();
 }
+
+#[tokio::test]
+async fn upsert_and_payload_updates_over_grpc() {
+    let index = Arc::new(DurableIndex::in_memory(Index::new(Config::new(2, Metric::L2)).unwrap()));
+    let addr = free_addr();
+    let (stop_tx, stop_rx) = oneshot::channel::<()>();
+    let srv = tokio::spawn(server::serve(index, addr, Duration::ZERO, async {
+        let _ = stop_rx.await;
+    }));
+    let mut c = connect(addr).await;
+    let fields = |k: &str, v: i64| pb::Payload { fields: HashMap::from([(k.to_string(), val_int(v))]) };
+
+    c.upsert(pb::InsertRequest { id: 1, vector: vec![1.0, 1.0], payload: Some(fields("a", 1)) }).await.unwrap();
+    c.upsert(pb::InsertRequest { id: 1, vector: vec![2.0, 2.0], payload: Some(fields("a", 2)) }).await.unwrap();
+    let g = c.get(pb::GetRequest { id: 1 }).await.unwrap().into_inner();
+    assert_eq!(g.vector, vec![2.0, 2.0]);
+
+    c.update_payload(pb::UpdatePayloadRequest { id: 1, payload: Some(fields("b", 3)), merge: true }).await.unwrap();
+    let p = c.get(pb::GetRequest { id: 1 }).await.unwrap().into_inner().payload.unwrap();
+    assert_eq!(p.fields.len(), 2);
+
+    c.update_payload(pb::UpdatePayloadRequest { id: 1, payload: Some(fields("c", 4)), merge: false }).await.unwrap();
+    let p = c.get(pb::GetRequest { id: 1 }).await.unwrap().into_inner().payload.unwrap();
+    assert_eq!(p.fields.len(), 1);
+
+    let err = c
+        .update_payload(pb::UpdatePayloadRequest { id: 99, payload: None, merge: true })
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::NotFound);
+
+    stop_tx.send(()).unwrap();
+    srv.await.unwrap().unwrap();
+}

@@ -4,6 +4,9 @@ package vecdb.v1;
 
 service VectorDb {
   rpc Insert(InsertRequest) returns (InsertResponse);
+  // insert, or replace vector and payload when the id exists
+  rpc Upsert(InsertRequest) returns (InsertResponse);
+  rpc UpdatePayload(UpdatePayloadRequest) returns (UpdatePayloadResponse);
   // client-streaming bulk load; one response after the stream closes
   rpc InsertStream(stream InsertRequest) returns (InsertStreamResponse);
   rpc Search(SearchRequest) returns (SearchResponse);
@@ -72,6 +75,15 @@ message InsertRequest {
 }
 
 message InsertResponse {}
+
+message UpdatePayloadRequest {
+  uint64 id = 1;
+  Payload payload = 2;
+  // false replaces the whole payload, true only sets the listed fields
+  bool merge = 3;
+}
+
+message UpdatePayloadResponse {}
 
 message InsertStreamResponse {
   uint64 inserted = 1;

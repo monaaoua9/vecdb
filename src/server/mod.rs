@@ -505,6 +505,7 @@ pub async fn serve_with(
         },
     );
 
+    #[allow(unused_mut)] // only reassigned with the tls feature
     let mut builder = tonic::transport::Server::builder();
     if let Some(t) = opts.tls {
         #[cfg(feature = "tls")]

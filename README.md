@@ -43,6 +43,11 @@ quantization, stored under `<data-dir>/collections/<name>/`). Data RPCs pick one
 `x-collection` request header, no header means `default`, so older clients keep working.
 PQ collections can't be created over RPC because they need a trained codebook.
 
+Query modes beyond plain k-NN: `search_batch` (parallel queries), `search_range` (radius),
+`recommend` (positive/negative example ids), `search_mmr` (diversified results), plus `count`,
+cursor-based `scroll` and `facets` over payload values. All of them are on gRPC too
+(`SearchBatch`, `Recommend`, `Count`, `Scroll`, `Facets`, and `radius` / `mmr_lambda` on `Search`).
+
 Design write-up with diagrams: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Build and run

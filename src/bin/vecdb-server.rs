@@ -54,9 +54,14 @@ struct Args {
     #[arg(long, default_value_t = 1_000_000)]
     max_elements: usize,
 
-    /// at start-up, rebuild the graph if more than this share of nodes are deleted (0 = never)
+    /// rebuild the graph when more than this share of nodes are deleted, at start-up and
+    /// every --compact-check-secs while serving (0 = never)
     #[arg(long, default_value_t = 0.3)]
     compact_above: f64,
+
+    /// how often the running server checks the deleted share, 0 = start-up only
+    #[arg(long, default_value_t = 60)]
+    compact_check_secs: u64,
 
     /// fsync the write-ahead log before acknowledging each write
     #[arg(long)]
@@ -111,6 +116,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
     let index = Arc::new(index);
     tracing::info!(kernel = index.stats().kernel, dim = index.config().dim, "index ready");
+
+    if args.compact_above > 0.0 && args.compact_check_secs > 0 {
+        let (index, above) = (index.clone(), args.compact_above);
+        let every = Duration::from_secs(args.compact_check_secs);
+        tokio::spawn(async move {
+            let mut t = tokio::time::interval(every);
+            t.tick().await;
+            loop {
+                t.tick().await;
+                let idx = index.clone();
+                let ran = tokio::task::spawn_blocking(move || {
+                    if idx.tombstone_ratio() <= above {
+                        return Ok(false);
+                    }
+                    let threads = std::thread::available_parallelism().map_or(2, |n| n.get());
+                    idx.compact_online(threads)
+                })
+                .await;
+                match ran {
+                    Ok(Ok(true)) => tracing::info!("online compaction done"),
+                    Ok(Ok(false)) => {}
+                    Ok(Err(e)) => tracing::error!(error = %e, "online compaction failed"),
+                    Err(e) => tracing::error!(error = %e, "compaction worker died"),
+                }
+            }
+        });
+    }
 
     let shutdown = async {
         let _ = tokio::signal::ctrl_c().await;

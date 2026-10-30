@@ -238,3 +238,48 @@ async fn collections_over_grpc() {
     stop_tx.send(()).unwrap();
     srv.await.unwrap().unwrap();
 }
+
+#[tokio::test]
+async fn batch_range_mmr_and_recommend_over_grpc() {
+    let mut cfg = Config::new(2, Metric::L2);
+    cfg.max_elements = 500;
+    let index = Arc::new(DurableIndex::in_memory(Index::new(cfg).unwrap()));
+    for i in 0..100u64 {
+        index.insert(i, &[i as f32, 0.0], Default::default()).unwrap();
+    }
+    let addr = free_addr();
+    let (stop_tx, stop_rx) = oneshot::channel::<()>();
+    let srv = tokio::spawn(server::serve(index, addr, Duration::ZERO, async {
+        let _ = stop_rx.await;
+    }));
+    let mut c = connect(addr).await;
+    let q = |x: f32| pb::SearchRequest { vector: vec![x, 0.0], k: 2, ..Default::default() };
+
+    let batch = c
+        .search_batch(pb::BatchSearchRequest { queries: vec![q(10.0), q(50.2), q(90.0)] })
+        .await
+        .unwrap()
+        .into_inner();
+    let firsts: Vec<u64> = batch.results.iter().map(|r| r.hits[0].id).collect();
+    assert_eq!(firsts, [10, 50, 90]);
+
+    let too_many = pb::BatchSearchRequest { queries: vec![q(1.0); 257] };
+    assert_eq!(c.search_batch(too_many).await.unwrap_err().code(), tonic::Code::InvalidArgument);
+
+    let ranged = pb::SearchRequest { vector: vec![40.0, 0.0], k: 50, radius: Some(4.0), ..Default::default() };
+    assert_eq!(c.search(ranged).await.unwrap().into_inner().hits.len(), 5);
+
+    let both = pb::SearchRequest { radius: Some(1.0), mmr_lambda: Some(0.5), ..q(1.0) };
+    assert_eq!(c.search(both).await.unwrap_err().code(), tonic::Code::InvalidArgument);
+
+    let mmr = pb::SearchRequest { mmr_lambda: Some(0.2), mmr_fetch: 20, k: 3, ..q(10.0) };
+    let ids: Vec<u64> = c.search(mmr).await.unwrap().into_inner().hits.iter().map(|h| h.id).collect();
+    assert_eq!(ids[0], 10);
+    assert!(ids.iter().any(|&i| i.abs_diff(10) >= 3), "{ids:?}");
+
+    let rec = pb::RecommendRequest { positive: vec![50], negative: vec![40], k: 1, ..Default::default() };
+    assert_eq!(c.recommend(rec).await.unwrap().into_inner().hits[0].id, 60);
+
+    stop_tx.send(()).unwrap();
+    srv.await.unwrap().unwrap();
+}

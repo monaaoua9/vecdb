@@ -10,6 +10,9 @@ service VectorDb {
   // client-streaming bulk load; one response after the stream closes
   rpc InsertStream(stream InsertRequest) returns (InsertStreamResponse);
   rpc Search(SearchRequest) returns (SearchResponse);
+  // runs the queries concurrently, results come back in the same order
+  rpc SearchBatch(BatchSearchRequest) returns (BatchSearchResponse);
+  rpc Recommend(RecommendRequest) returns (SearchResponse);
   rpc Get(GetRequest) returns (GetResponse);
   rpc Delete(DeleteRequest) returns (DeleteResponse);
   rpc Stats(StatsRequest) returns (StatsResponse);
@@ -105,6 +108,31 @@ message SearchRequest {
   optional Filter filter = 4;
   FilterStrategy strategy = 5;
   bool with_payload = 6;
+  // only hits within this distance, nearest first, at most k of them
+  optional float radius = 7;
+  // diversify with maximal marginal relevance: 1 = plain order, lower = more spread out
+  optional float mmr_lambda = 8;
+  // candidates considered by mmr, 0 = 4 * k
+  uint32 mmr_fetch = 9;
+}
+
+message BatchSearchRequest {
+  repeated SearchRequest queries = 1;
+}
+
+message BatchSearchResponse {
+  repeated SearchResponse results = 1;
+}
+
+// searches around 2 * mean(positive) - mean(negative); the given ids are never returned
+message RecommendRequest {
+  repeated uint64 positive = 1;
+  repeated uint64 negative = 2;
+  uint32 k = 3;
+  uint32 ef = 4;
+  optional Filter filter = 5;
+  FilterStrategy strategy = 6;
+  bool with_payload = 7;
 }
 
 message Hit {

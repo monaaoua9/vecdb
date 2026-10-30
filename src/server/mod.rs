@@ -24,6 +24,7 @@ pub mod pb {
 use pb::vector_db_server::{VectorDb, VectorDbServer};
 
 const MAX_K: usize = 10_000;
+const MAX_BATCH: usize = 256;
 const STREAM_BATCH: usize = 512;
 const MAX_MESSAGE_BYTES: usize = 64 << 20;
 
@@ -62,6 +63,60 @@ impl VectorDbService {
         }
         Ok(out)
     }
+}
+
+fn search_params(
+    k: u32,
+    ef: u32,
+    filter: Option<pb::Filter>,
+    strategy: i32,
+) -> Result<SearchParams, Status> {
+    let k = k as usize;
+    if k == 0 || k > MAX_K {
+        return Err(Status::invalid_argument(format!("k must be in 1..={MAX_K}")));
+    }
+    let mut params = SearchParams::new(k).strategy(convert::strategy_in(strategy));
+    if ef > 0 {
+        params = params.ef(ef as usize);
+    }
+    if let Some(f) = filter {
+        params = params.filter(convert::filter_in(f)?);
+    }
+    Ok(params)
+}
+
+fn hits_out(index: &DurableIndex, hits: Vec<crate::Hit>, with_payload: bool) -> Vec<pb::Hit> {
+    hits.into_iter()
+        .map(|h| pb::Hit {
+            id: h.id,
+            distance: h.distance,
+            payload: with_payload
+                .then(|| index.get(h.id).map(|rec| convert::payload_out(&rec.payload)))
+                .flatten(),
+        })
+        .collect()
+}
+
+async fn run_search(index: Arc<DurableIndex>, r: pb::SearchRequest) -> Result<pb::SearchResponse, Status> {
+    if r.radius.is_some() && r.mmr_lambda.is_some() {
+        return Err(Status::invalid_argument("radius and mmr_lambda can't be combined"));
+    }
+    let params = search_params(r.k, r.ef, r.filter, r.strategy)?;
+    let with_payload = r.with_payload;
+    let fetch = if r.mmr_fetch > 0 { r.mmr_fetch as usize } else { params.k * 4 };
+
+    let t0 = Instant::now();
+    let hits = spawn_blocking(move || {
+        let hits = match (r.radius, r.mmr_lambda) {
+            (Some(radius), _) => index.search_range(&r.vector, radius, &params)?,
+            (_, Some(lambda)) => index.search_mmr(&r.vector, &params, lambda, fetch)?,
+            _ => index.search_with(&r.vector, &params)?,
+        };
+        Ok::<_, crate::Error>(hits_out(&index, hits, with_payload))
+    })
+    .await
+    .map_err(blocking_err)??;
+    Ok(pb::SearchResponse { hits, took_micros: t0.elapsed().as_micros() as u64 })
 }
 
 fn collection_config(c: pb::CollectionConfig) -> Result<Config, Status> {
@@ -163,38 +218,39 @@ impl VectorDb for VectorDbService {
 
     async fn search(&self, req: Request<pb::SearchRequest>) -> Result<Response<pb::SearchResponse>, Status> {
         let index = self.col(&req)?;
+        run_search(index, req.into_inner()).await.map(Response::new)
+    }
+
+    async fn search_batch(
+        &self,
+        req: Request<pb::BatchSearchRequest>,
+    ) -> Result<Response<pb::BatchSearchResponse>, Status> {
+        let index = self.col(&req)?;
+        let queries = req.into_inner().queries;
+        if queries.len() > MAX_BATCH {
+            return Err(Status::invalid_argument(format!("at most {MAX_BATCH} queries per batch")));
+        }
+        let jobs: Vec<_> = queries.into_iter().map(|q| tokio::spawn(run_search(index.clone(), q))).collect();
+        let mut results = Vec::with_capacity(jobs.len());
+        for j in jobs {
+            results.push(j.await.map_err(blocking_err)??);
+        }
+        Ok(Response::new(pb::BatchSearchResponse { results }))
+    }
+
+    async fn recommend(&self, req: Request<pb::RecommendRequest>) -> Result<Response<pb::SearchResponse>, Status> {
+        let index = self.col(&req)?;
         let r = req.into_inner();
-        let k = r.k as usize;
-        if k == 0 || k > MAX_K {
-            return Err(Status::invalid_argument(format!("k must be in 1..={MAX_K}")));
-        }
-        let mut params = SearchParams::new(k).strategy(convert::strategy_in(r.strategy));
-        if r.ef > 0 {
-            params = params.ef(r.ef as usize);
-        }
-        if let Some(f) = r.filter {
-            params = params.filter(convert::filter_in(f)?);
-        }
+        let params = search_params(r.k, r.ef, r.filter, r.strategy)?;
         let with_payload = r.with_payload;
 
         let t0 = Instant::now();
         let hits = spawn_blocking(move || {
-            let hits = index.search_with(&r.vector, &params)?;
-            let out: Vec<pb::Hit> = hits
-                .into_iter()
-                .map(|h| pb::Hit {
-                    id: h.id,
-                    distance: h.distance,
-                    payload: with_payload
-                        .then(|| index.get(h.id).map(|rec| convert::payload_out(&rec.payload)))
-                        .flatten(),
-                })
-                .collect();
-            Ok::<_, crate::Error>(out)
+            let hits = index.recommend(&r.positive, &r.negative, &params)?;
+            Ok::<_, crate::Error>(hits_out(&index, hits, with_payload))
         })
         .await
         .map_err(blocking_err)??;
-
         Ok(Response::new(pb::SearchResponse { hits, took_micros: t0.elapsed().as_micros() as u64 }))
     }
 

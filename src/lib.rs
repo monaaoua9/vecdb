@@ -21,5 +21,5 @@ pub use distance::Metric;
 pub use durable::{Durability, DurableIndex};
 pub use error::{Error, Result};
 pub use filter::{Filter, FilterStrategy, Payload, Value};
-pub use hnsw::{Hit, Index, Item, Record, SearchParams, Stats};
+pub use hnsw::{Hit, Index, Item, Page, Record, SearchParams, Stats};
 pub use quant::Quantization;

@@ -12,6 +12,7 @@ use crate::pq::Codebook;
 use crate::quant::Quantization;
 use crate::store::{Segment, VectorStore};
 
+mod browse;
 mod compact;
 mod graph;
 mod insert;
@@ -19,6 +20,7 @@ mod query;
 mod scratch;
 mod search;
 
+pub use browse::Page;
 pub(crate) use graph::{AppendVec, Node};
 
 const MAX_LEVEL: usize = 16;

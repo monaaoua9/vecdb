@@ -13,6 +13,14 @@ enum Key {
 }
 
 impl Key {
+    fn to_value(&self) -> Value {
+        match self {
+            Key::Bool(b) => Value::Bool(*b),
+            Key::Int(i) => Value::Int(*i),
+            Key::Str(s) => Value::Str(s.clone()),
+        }
+    }
+
     // floats are not hashable, so they stay out of the inverted index
     fn of(v: &Value) -> Option<Key> {
         match v {
@@ -48,6 +56,15 @@ impl PayloadIndex {
                 b.remove(id);
             }
         }
+    }
+
+    /// every indexed value of `field` with the ids that hold it
+    pub fn values_of(&self, field: &str) -> Vec<(Value, RoaringBitmap)> {
+        let m = self.map.read();
+        m.iter()
+            .filter(|((f, _), ids)| f == field && !ids.is_empty())
+            .map(|((_, k), ids)| (k.to_value(), ids.clone()))
+            .collect()
     }
 
     /// Ids that can satisfy `f`, and whether that set is exactly the answer.

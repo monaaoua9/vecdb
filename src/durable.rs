@@ -21,7 +21,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::filter::Payload;
-use crate::hnsw::{Hit, Index, Item, Record, SearchParams, Stats};
+use crate::filter::{Filter, Value};
+use crate::hnsw::{Hit, Index, Item, Page, Record, SearchParams, Stats};
 use crate::pq::Codebook;
 use crate::quant::Quantization;
 use crate::snapshots;
@@ -362,6 +363,18 @@ impl DurableIndex {
 
     pub fn search_mmr(&self, query: &[f32], p: &SearchParams, lambda: f32, fetch: usize) -> Result<Vec<Hit>> {
         self.index().search_mmr(query, p, lambda, fetch)
+    }
+
+    pub fn count(&self, filter: Option<&Filter>) -> usize {
+        self.index().count(filter)
+    }
+
+    pub fn scroll(&self, filter: Option<&Filter>, cursor: u64, limit: usize, with_vector: bool) -> Page {
+        self.index().scroll(filter, cursor, limit, with_vector)
+    }
+
+    pub fn facets(&self, field: &str, filter: Option<&Filter>, limit: usize) -> Vec<(Value, usize)> {
+        self.index().facets(field, filter, limit)
     }
 
     pub fn exact_search(&self, query: &[f32], k: usize) -> Result<Vec<Hit>> {

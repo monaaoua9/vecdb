@@ -48,6 +48,12 @@ Query modes beyond plain k-NN: `search_batch` (parallel queries), `search_range`
 cursor-based `scroll` and `facets` over payload values. All of them are on gRPC too
 (`SearchBatch`, `Recommend`, `Count`, `Scroll`, `Facets`, and `radius` / `mmr_lambda` on `Search`).
 
+Hybrid search: `enable_text_index(field)` (server: `--text-field body`) builds an in-memory BM25
+index over one string payload field, with Arabic folding (diacritics, tatweel, alef/ya/ta-marbuta
+variants). `search_text` is keyword-only; `search_hybrid` fuses it with the vector ranking using
+reciprocal rank fusion. On gRPC, set `text` on `Search` (with or without a vector). The index is
+not stored in snapshots and is rebuilt from payloads at start-up.
+
 Design write-up with diagrams: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Build and run

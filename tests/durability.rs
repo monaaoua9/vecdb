@@ -299,6 +299,8 @@ fn payload_edits_survive_crash() {
     assert_eq!(p["d"], Value::Int(4));
 }
 
+// is_multiple_of needs a newer rust than our msrv
+#[allow(clippy::manual_is_multiple_of)]
 #[test]
 fn online_compaction_keeps_writes_made_during_the_rebuild() {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -330,8 +332,8 @@ fn online_compaction_keeps_writes_made_during_the_rebuild() {
         done.store(true, Ordering::Release);
         let reached = writer.join().unwrap();
         // finish the remaining inserts after the swap so the expectation below is fixed
-        for next in reached..1200 {
-            d.insert(next as u64, &data[next], Payload::new()).unwrap();
+        for (next, v) in data.iter().enumerate().take(1200).skip(reached) {
+            d.insert(next as u64, v, Payload::new()).unwrap();
             if next % 3 == 0 {
                 d.delete((next - 300) as u64).unwrap();
             }

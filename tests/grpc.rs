@@ -204,11 +204,11 @@ async fn collections_over_grpc() {
         max_elements: 100,
         ..Default::default()
     };
-    c.create_collection(pb::CreateCollectionRequest { name: "docs".into(), config: Some(cfg.clone()) })
+    c.create_collection(pb::CreateCollectionRequest { name: "docs".into(), config: Some(cfg) })
         .await
         .unwrap();
     let dup = c
-        .create_collection(pb::CreateCollectionRequest { name: "docs".into(), config: Some(cfg.clone()) })
+        .create_collection(pb::CreateCollectionRequest { name: "docs".into(), config: Some(cfg) })
         .await
         .unwrap_err();
     assert_eq!(dup.code(), tonic::Code::AlreadyExists);

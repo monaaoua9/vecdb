@@ -1,6 +1,8 @@
 //! Randomised model check: a long mix of every mutation, checkpoints and online compactions,
 //! then a "crash" (drop) and a reopen. The reopened index must equal a plain HashMap that saw
 //! the same operations.
+// is_multiple_of needs a newer rust than our msrv
+#![allow(clippy::manual_is_multiple_of)]
 
 mod common;
 

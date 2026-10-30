@@ -1,6 +1,8 @@
 //! Mutation fuzzing of the on-disk formats. Whatever happens to the bytes, opening must return
 //! an error or an index that still answers queries; it must never panic, and a snapshot that
 //! does open must still report the vector count it was written with (the header is checksummed).
+// is_multiple_of needs a newer rust than our msrv
+#![allow(clippy::manual_is_multiple_of)]
 
 mod common;
 

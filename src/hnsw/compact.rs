@@ -36,7 +36,7 @@ impl Index {
                 continue;
             }
             let Some(v) = self.full.as_ref().unwrap_or(&self.store).decode(i, &mut buf) else { continue };
-            chunk.push(Item { id: node.ext_id, vector: v.to_vec(), payload: node.payload.clone() });
+            chunk.push(Item { id: node.ext_id, vector: v.to_vec(), payload: node.payload.read().clone() });
             if chunk.len() == CHUNK {
                 out.insert_bulk(&chunk, threads)?;
                 chunk.clear();

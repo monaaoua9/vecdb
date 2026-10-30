@@ -37,7 +37,7 @@ impl<T> AppendVec<T> {
 pub(crate) struct Node {
     pub ext_id: u64,
     pub deleted: AtomicBool,
-    pub payload: Payload,
+    pub payload: RwLock<Payload>,
     /// one adjacency list per layer, 0..=level
     pub links: Box<[RwLock<Vec<u32>>]>,
 }
@@ -47,7 +47,7 @@ impl Node {
         let links = (0..=level as usize)
             .map(|l| RwLock::new(Vec::with_capacity(if l == 0 { m * 2 } else { m })))
             .collect();
-        Node { ext_id, deleted: AtomicBool::new(false), payload, links }
+        Node { ext_id, deleted: AtomicBool::new(false), payload: RwLock::new(payload), links }
     }
 }
 

@@ -39,8 +39,8 @@ impl Gate<'_> {
         }
         match self {
             Gate::All | Gate::Live => true,
-            Gate::Set { set, verify } => set.contains(id) && verify.is_none_or(|f| f.matches(&n.payload)),
-            Gate::Pred(f) => f.matches(&n.payload),
+            Gate::Set { set, verify } => set.contains(id) && verify.is_none_or(|f| f.matches(&n.payload.read())),
+            Gate::Pred(f) => f.matches(&n.payload.read()),
         }
     }
 }
@@ -154,7 +154,7 @@ impl Index {
             let exhausted = raw.len() < want || want >= total;
             let mut ok: Vec<Cand> = raw
                 .into_iter()
-                .filter(|c| self.nodes.get(c.id as usize).is_some_and(|n| f.matches(&n.payload)))
+                .filter(|c| self.nodes.get(c.id as usize).is_some_and(|n| f.matches(&n.payload.read())))
                 .collect();
             if ok.len() >= k || exhausted {
                 ok.truncate(k);
@@ -176,7 +176,7 @@ impl Index {
             let Some(n) = self.nodes.get(id as usize) else {
                 continue;
             };
-            if n.deleted.load(Ordering::Relaxed) || pred.is_some_and(|f| !f.matches(&n.payload)) {
+            if n.deleted.load(Ordering::Relaxed) || pred.is_some_and(|f| !f.matches(&n.payload.read())) {
                 continue;
             }
             let Some(v) = self.full.as_ref().unwrap_or(&self.store).get(id as usize) else {

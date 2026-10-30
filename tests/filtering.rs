@@ -110,3 +110,38 @@ fn deleted_vectors_never_surface() {
     let hits = idx.search_with(&qs[0], &SearchParams::new(50).filter(Filter::eq("tag", "rare"))).unwrap();
     assert!(hits.iter().all(|h| h.id % 2 == 1));
 }
+
+#[test]
+fn payload_edits_reach_the_filter_index() {
+    let mut cfg = Config::new(2, Metric::L2);
+    cfg.max_elements = 10;
+    let idx = Index::new(cfg).unwrap();
+    let mut p = Payload::new();
+    p.insert("lang".into(), Value::Str("ar".into()));
+    p.insert("year".into(), Value::Int(2020));
+    idx.insert(1, &[0.0, 0.0], p).unwrap();
+    idx.insert(2, &[1.0, 1.0], Payload::new()).unwrap();
+
+    let count = |f: Filter| idx.search_with(&[0.0, 0.0], &SearchParams::new(5).filter(f)).unwrap().len();
+    assert_eq!(count(Filter::eq("lang", "ar")), 1);
+
+    let mut patch = Payload::new();
+    patch.insert("lang".into(), Value::Str("en".into()));
+    idx.merge_payload(1, patch).unwrap();
+    assert_eq!(count(Filter::eq("lang", "ar")), 0);
+    assert_eq!(count(Filter::eq("lang", "en")), 1);
+    // untouched key survives the merge
+    assert_eq!(idx.get(1).unwrap().payload["year"], Value::Int(2020));
+
+    let mut whole = Payload::new();
+    whole.insert("topic".into(), Value::Str("db".into()));
+    idx.set_payload(1, whole).unwrap();
+    assert_eq!(count(Filter::eq("lang", "en")), 0);
+    assert_eq!(count(Filter::eq("topic", "db")), 1);
+    assert!(!idx.get(1).unwrap().payload.contains_key("year"));
+
+    idx.set_payload(2, Payload::new()).unwrap();
+    idx.delete(1).unwrap();
+    assert!(matches!(idx.set_payload(1, Payload::new()), Err(vecdb::Error::NotFound(1))));
+    assert_eq!(count(Filter::eq("topic", "db")), 0);
+}

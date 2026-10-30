@@ -43,6 +43,8 @@ enum OpRef<'a> {
     Insert { id: u64, vector: &'a [f32], payload: &'a Payload },
     Delete(u64),
     Upsert { id: u64, vector: &'a [f32], payload: &'a Payload },
+    SetPayload { id: u64, payload: &'a Payload },
+    MergePayload { id: u64, payload: &'a Payload },
 }
 
 #[derive(Deserialize)]
@@ -50,6 +52,8 @@ enum Op {
     Insert { id: u64, vector: Vec<f32>, payload: Payload },
     Delete(u64),
     Upsert { id: u64, vector: Vec<f32>, payload: Payload },
+    SetPayload { id: u64, payload: Payload },
+    MergePayload { id: u64, payload: Payload },
 }
 
 pub struct DurableIndex {
@@ -216,6 +220,8 @@ fn replay(index: &Index, path: &Path) -> Result<(usize, u64)> {
             Op::Insert { id, vector, payload } => index.insert(id, &vector, payload),
             Op::Delete(id) => index.delete(id),
             Op::Upsert { id, vector, payload } => index.upsert(id, &vector, payload),
+            Op::SetPayload { id, payload } => index.set_payload(id, payload),
+            Op::MergePayload { id, payload } => index.merge_payload(id, payload),
         };
         match res {
             Err(e) if !skippable(&e) => return Err(e),
@@ -339,6 +345,26 @@ impl DurableIndex {
         let _g = self.gate.read();
         let rec = self.dir.is_some().then(|| encode(&OpRef::Upsert { id, vector, payload: &payload }));
         self.index.upsert(id, vector, payload)?;
+        match rec {
+            Some(r) => self.append(&[r?]),
+            None => Ok(()),
+        }
+    }
+
+    pub fn set_payload(&self, id: u64, payload: Payload) -> Result<()> {
+        let _g = self.gate.read();
+        let rec = self.dir.is_some().then(|| encode(&OpRef::SetPayload { id, payload: &payload }));
+        self.index.set_payload(id, payload)?;
+        match rec {
+            Some(r) => self.append(&[r?]),
+            None => Ok(()),
+        }
+    }
+
+    pub fn merge_payload(&self, id: u64, payload: Payload) -> Result<()> {
+        let _g = self.gate.read();
+        let rec = self.dir.is_some().then(|| encode(&OpRef::MergePayload { id, payload: &payload }));
+        self.index.merge_payload(id, payload)?;
         match rec {
             Some(r) => self.append(&[r?]),
             None => Ok(()),

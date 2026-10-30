@@ -275,3 +275,26 @@ fn upsert_survives_crash() {
     assert_eq!(d.get(1).unwrap().vector, vec![2.0; 12]);
     assert_eq!(d.get(2).unwrap().vector, vec![3.0; 12]);
 }
+
+#[test]
+fn payload_edits_survive_crash() {
+    use vecdb::Value;
+    let dir = tempfile::tempdir().unwrap();
+    let one = |k: &str, v: i64| {
+        let mut p = Payload::new();
+        p.insert(k.into(), Value::Int(v));
+        p
+    };
+    {
+        let d = DurableIndex::open(dir.path(), cfg(), Durability::Flush).unwrap();
+        d.insert(1, &[1.0; 12], one("a", 1)).unwrap();
+        d.merge_payload(1, one("b", 2)).unwrap();
+        d.set_payload(1, one("c", 3)).unwrap();
+        d.merge_payload(1, one("d", 4)).unwrap();
+    }
+    let d = DurableIndex::open(dir.path(), cfg(), Durability::Flush).unwrap();
+    let p = d.get(1).unwrap().payload;
+    assert_eq!(p.len(), 2);
+    assert_eq!(p["c"], Value::Int(3));
+    assert_eq!(p["d"], Value::Int(4));
+}

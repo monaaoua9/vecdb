@@ -125,7 +125,7 @@ impl Index {
                 deleted: n.deleted.load(Ordering::Relaxed),
                 links: n.links.iter().map(|l| l.read().clone()).collect(),
             });
-            meta.payloads.push(n.payload.clone());
+            meta.payloads.push(n.payload.read().clone());
         }
         let meta_bytes = postcard::to_stdvec(&meta)?;
 
@@ -256,7 +256,7 @@ impl Index {
                     idx.tombstones.fetch_add(1, Ordering::Relaxed);
                 } else {
                     ids.insert(nm.ext_id, i as u32);
-                    idx.pidx.add(i as u32, &node.payload);
+                    idx.pidx.add(i as u32, &node.payload.read());
                     live += 1;
                 }
                 idx.nodes.set(i, node);

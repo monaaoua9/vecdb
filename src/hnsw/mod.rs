@@ -199,7 +199,7 @@ impl Index {
         let (id, n) = self.lookup(ext_id)?;
         let mut buf = Vec::new();
         let v = self.full.as_ref().unwrap_or(&self.store).decode(id as usize, &mut buf)?.to_vec();
-        Some(Record { id: ext_id, vector: v, payload: n.payload.clone() })
+        Some(Record { id: ext_id, vector: v, payload: n.payload.read().clone() })
     }
 
     pub fn delete(&self, ext_id: u64) -> Result<()> {
@@ -223,10 +223,38 @@ impl Index {
             return;
         };
         if !node.deleted.swap(true, Ordering::AcqRel) {
-            self.pidx.remove(id, &node.payload);
+            self.pidx.remove(id, &node.payload.read());
             self.live.fetch_sub(1, Ordering::Relaxed);
             self.tombstones.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    /// Replaces the whole payload of a live id.
+    pub fn set_payload(&self, ext_id: u64, payload: Payload) -> Result<()> {
+        self.edit_payload(ext_id, |_| payload)
+    }
+
+    /// Adds or overwrites the given keys, leaves the rest alone.
+    pub fn merge_payload(&self, ext_id: u64, patch: Payload) -> Result<()> {
+        self.edit_payload(ext_id, |mut cur| {
+            cur.extend(patch);
+            cur
+        })
+    }
+
+    fn edit_payload(&self, ext_id: u64, f: impl FnOnce(Payload) -> Payload) -> Result<()> {
+        let _g = self.gate.read();
+        let (id, node) = self.lookup(ext_id).ok_or(Error::NotFound(ext_id))?;
+        let mut cur = node.payload.write();
+        // delete tombstones first and then waits on this lock to unindex, so this is the last word
+        if node.deleted.load(Ordering::Acquire) {
+            return Err(Error::NotFound(ext_id));
+        }
+        self.pidx.remove(id, &cur);
+        let next = f(std::mem::take(&mut *cur));
+        self.pidx.add(id, &next);
+        *cur = next;
+        Ok(())
     }
 
     pub fn stats(&self) -> Stats {

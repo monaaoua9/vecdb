@@ -25,6 +25,8 @@ use pb::vector_db_server::{VectorDb, VectorDbServer};
 
 const MAX_K: usize = 10_000;
 const MAX_BATCH: usize = 256;
+const MAX_SCROLL: usize = 10_000;
+const MAX_FACETS: usize = 1000;
 const STREAM_BATCH: usize = 512;
 const MAX_MESSAGE_BYTES: usize = 64 << 20;
 
@@ -252,6 +254,56 @@ impl VectorDb for VectorDbService {
         .await
         .map_err(blocking_err)??;
         Ok(Response::new(pb::SearchResponse { hits, took_micros: t0.elapsed().as_micros() as u64 }))
+    }
+
+    async fn count(&self, req: Request<pb::CountRequest>) -> Result<Response<pb::CountResponse>, Status> {
+        let index = self.col(&req)?;
+        let filter = req.into_inner().filter.map(convert::filter_in).transpose()?;
+        let count = spawn_blocking(move || index.count(filter.as_ref())).await.map_err(blocking_err)?;
+        Ok(Response::new(pb::CountResponse { count: count as u64 }))
+    }
+
+    async fn scroll(&self, req: Request<pb::ScrollRequest>) -> Result<Response<pb::ScrollResponse>, Status> {
+        let index = self.col(&req)?;
+        let r = req.into_inner();
+        let limit = match r.limit as usize {
+            0 => 100,
+            n if n > MAX_SCROLL => return Err(Status::invalid_argument(format!("limit is at most {MAX_SCROLL}"))),
+            n => n,
+        };
+        let filter = r.filter.map(convert::filter_in).transpose()?;
+        let (with_vector, with_payload) = (r.with_vector, r.with_payload);
+        let page = spawn_blocking(move || index.scroll(filter.as_ref(), r.cursor, limit, with_vector))
+            .await
+            .map_err(blocking_err)?;
+        let items = page
+            .items
+            .into_iter()
+            .map(|rec| pb::ScrollItem {
+                id: rec.id,
+                vector: rec.vector,
+                payload: with_payload.then(|| convert::payload_out(&rec.payload)),
+            })
+            .collect();
+        Ok(Response::new(pb::ScrollResponse { items, next_cursor: page.next }))
+    }
+
+    async fn facets(&self, req: Request<pb::FacetsRequest>) -> Result<Response<pb::FacetsResponse>, Status> {
+        let index = self.col(&req)?;
+        let r = req.into_inner();
+        let limit = match r.limit as usize {
+            0 => 20,
+            n => n.min(MAX_FACETS),
+        };
+        let filter = r.filter.map(convert::filter_in).transpose()?;
+        let found = spawn_blocking(move || index.facets(&r.field, filter.as_ref(), limit))
+            .await
+            .map_err(blocking_err)?;
+        let facets = found
+            .into_iter()
+            .map(|(v, n)| pb::FacetCount { value: Some(convert::value_out(&v)), count: n as u64 })
+            .collect();
+        Ok(Response::new(pb::FacetsResponse { facets }))
     }
 
     async fn get(&self, req: Request<pb::GetRequest>) -> Result<Response<pb::GetResponse>, Status> {

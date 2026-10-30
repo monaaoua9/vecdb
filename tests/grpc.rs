@@ -283,3 +283,60 @@ async fn batch_range_mmr_and_recommend_over_grpc() {
     stop_tx.send(()).unwrap();
     srv.await.unwrap().unwrap();
 }
+
+#[tokio::test]
+async fn count_scroll_and_facets_over_grpc() {
+    let mut cfg = Config::new(2, Metric::L2);
+    cfg.max_elements = 500;
+    let index = Arc::new(DurableIndex::in_memory(Index::new(cfg).unwrap()));
+    for i in 0..60u64 {
+        let mut p = vecdb::Payload::new();
+        p.insert("kind".into(), vecdb::Value::Str(if i % 3 == 0 { "a" } else { "b" }.into()));
+        index.insert(i, &[i as f32, 0.0], p).unwrap();
+    }
+    let addr = free_addr();
+    let (stop_tx, stop_rx) = oneshot::channel::<()>();
+    let srv = tokio::spawn(server::serve(index, addr, Duration::ZERO, async {
+        let _ = stop_rx.await;
+    }));
+    let mut c = connect(addr).await;
+    let only_a = || pb::Filter {
+        kind: Some(pb::filter::Kind::Match(pb::FieldMatch { field: "kind".into(), value: Some(val_str("a")) })),
+    };
+
+    assert_eq!(c.count(pb::CountRequest { filter: None }).await.unwrap().into_inner().count, 60);
+    assert_eq!(c.count(pb::CountRequest { filter: Some(only_a()) }).await.unwrap().into_inner().count, 20);
+
+    let (mut seen, mut cursor) = (vec![], 0);
+    loop {
+        let r = c
+            .scroll(pb::ScrollRequest {
+                filter: Some(only_a()),
+                cursor,
+                limit: 7,
+                with_payload: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(r.items.iter().all(|i| i.payload.is_some() && i.vector.is_empty()));
+        seen.extend(r.items.iter().map(|i| i.id));
+        match r.next_cursor {
+            Some(n) => cursor = n,
+            None => break,
+        }
+    }
+    assert_eq!(seen, (0..60).step_by(3).collect::<Vec<_>>());
+
+    let too_big = c.scroll(pb::ScrollRequest { limit: 10_001, ..Default::default() }).await.unwrap_err();
+    assert_eq!(too_big.code(), tonic::Code::InvalidArgument);
+
+    let f = c.facets(pb::FacetsRequest { field: "kind".into(), ..Default::default() }).await.unwrap().into_inner();
+    assert_eq!(f.facets.len(), 2);
+    assert_eq!(f.facets[0].count, 40);
+    assert_eq!(f.facets[1].count, 20);
+
+    stop_tx.send(()).unwrap();
+    srv.await.unwrap().unwrap();
+}

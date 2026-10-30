@@ -13,6 +13,10 @@ service VectorDb {
   // runs the queries concurrently, results come back in the same order
   rpc SearchBatch(BatchSearchRequest) returns (BatchSearchResponse);
   rpc Recommend(RecommendRequest) returns (SearchResponse);
+  rpc Count(CountRequest) returns (CountResponse);
+  // pages through the collection in insertion order, see ScrollRequest.cursor
+  rpc Scroll(ScrollRequest) returns (ScrollResponse);
+  rpc Facets(FacetsRequest) returns (FacetsResponse);
   rpc Get(GetRequest) returns (GetResponse);
   rpc Delete(DeleteRequest) returns (DeleteResponse);
   rpc Stats(StatsRequest) returns (StatsResponse);
@@ -235,4 +239,51 @@ message CollectionInfo {
 
 message ListCollectionsResponse {
   repeated CollectionInfo collections = 1;
+}
+
+message CountRequest {
+  optional Filter filter = 1;
+}
+
+message CountResponse {
+  uint64 count = 1;
+}
+
+message ScrollRequest {
+  optional Filter filter = 1;
+  // 0 to start, then the previous response's next_cursor. Stays valid across inserts and
+  // deletes, not across a compaction or an upsert of an already-visited id
+  uint64 cursor = 2;
+  // 0 = 100, at most 10000
+  uint32 limit = 3;
+  bool with_vector = 4;
+  bool with_payload = 5;
+}
+
+message ScrollItem {
+  uint64 id = 1;
+  repeated float vector = 2;
+  Payload payload = 3;
+}
+
+message ScrollResponse {
+  repeated ScrollItem items = 1;
+  // absent on the last page
+  optional uint64 next_cursor = 2;
+}
+
+message FacetsRequest {
+  string field = 1;
+  optional Filter filter = 2;
+  // 0 = 20, at most 1000
+  uint32 limit = 3;
+}
+
+message FacetCount {
+  Value value = 1;
+  uint64 count = 2;
+}
+
+message FacetsResponse {
+  repeated FacetCount facets = 1;
 }

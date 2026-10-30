@@ -71,3 +71,14 @@ The README has SIFT1M results (recall vs latency for f32, SQ8 and PQ32 + rerank)
 - Query set drawn from the same distribution as the data.
 - No comparison against another engine in this file.
 - The AVX-512 and NEON kernels are not exercised here (this CPU has neither).
+
+## Did the feature work slow search down? (2026-10-30)
+
+Synthetic data, 50,000 x 128 uniform random, L2, `M=16`, `ef_construction=100`, k=10, `ef=64`, one query thread, built on one thread, 2000 queries, best of 7 passes per run. Old (commit `7536f7d`, before upserts, payload locks, collections, hybrid search and replication) and new alternated in one session.
+
+| build | runs | median QPS | min – max |
+|---|---:|---:|---|
+| old | 6 | 2,472 | 2,127 – 3,080 |
+| new | 8 | 2,622 | 2,194 – 4,388 |
+
+The ranges overlap and the new median is not lower, so no slowdown shows up. An earlier 3-run round had the new build about 10% slower at `ef=64` and equal at `ef=256`; the old build's own spread (about 25%) was larger than that gap. The laptop is busy (several terminals, disk almost full), so don't read anything into a difference under about 25%. Not comparable to the tables above: different data and size.

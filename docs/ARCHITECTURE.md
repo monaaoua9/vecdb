@@ -266,12 +266,18 @@ for I/O. Errors map onto gRPC codes (`InvalidArgument`, `AlreadyExists`,
 
 Stated plainly so nobody has to discover them:
 
-- **Compaction is offline.** Deletes leave tombstones until `Index::compacted`
-  rebuilds the graph from live vectors (chunked, parallel). `DurableIndex::compact`
-  needs `&mut self`, so the server runs it at start-up when the tombstone ratio
-  exceeds `--compact-above`, then checkpoints. Compacting a live, shared index
-  would need an index swap behind an `ArcSwap`-style handle; not done.
-- **Payloads are immutable** once inserted (delete and re-insert to change).
+- **Compaction is online but costs capacity until it runs.** `DurableIndex::compact_online`
+  rebuilds the graph in the background, replays the writes that arrived meanwhile and swaps
+  the index in memory; the server checks every `--compact-check-secs`. Until then deletes and
+  upserts leave tombstones that keep routing queries and use a capacity slot. The compacted
+  state reaches disk with the next checkpoint (recovery meanwhile replays the log onto the
+  old snapshot, which yields the same data).
+- **Payloads can be changed in place** (`set_payload`, `merge_payload`); the vector changes
+  only through `upsert`, which allocates a new node and tombstones the old one.
+- **The BM25 index is in memory only.** It is rebuilt from payloads at start-up, so large
+  collections start slower; snapshots don't carry it.
+- **Binary quantization needs rerank to be accurate** (about 0.40 recall@10 alone against 0.99
+  with it on the test data) and assumes roughly zero-centred components.
 - **`max_elements` is fixed at creation** (it sizes the node table); `open_with`
   can raise it when reloading a snapshot directly.
 - **PQ needs a codebook before the first insert.** In the library that is
@@ -287,4 +293,10 @@ Stated plainly so nobody has to discover them:
   machine supports neither. The test that checks every available kernel
   against scalar will exercise them automatically on hardware that has them,
   and CI runs it on `aarch64`.
-- Single node. No sharding or replication.
+- **Replication is one leader with read replicas.** A replica loads the leader's newest
+  snapshot and tails its write-ahead log (`src/server/replicate.rs`); it is in-memory,
+  asynchronous, can't be chained and has no failover. The leader keeps the previous log
+  through a checkpoint so a caught-up replica can cross into the next one without
+  re-downloading; one that is further behind is told to resync. No sharding.
+- **Metrics and `--api-keys-file` are minimal**: the metrics port is plain HTTP, every API
+  key has full access, TLS is behind the `tls` cargo feature.

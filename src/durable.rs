@@ -48,7 +48,7 @@ enum OpRef<'a> {
 }
 
 #[derive(Deserialize, Clone)]
-enum Op {
+pub(crate) enum Op {
     Insert { id: u64, vector: Vec<f32>, payload: Payload },
     Delete(u64),
     Upsert { id: u64, vector: Vec<f32>, payload: Payload },
@@ -59,7 +59,9 @@ enum Op {
 pub struct DurableIndex {
     // swapped wholesale by online compaction; readers clone the Arc and keep using the old one
     index: RwLock<Arc<Index>>,
-    cfg: Config,
+    // bumped when the index is replaced from outside, so a compaction that started earlier
+    // knows its result is stale
+    epoch: AtomicU64,
     dir: Option<PathBuf>,
     mode: Durability,
     wal: RwLock<Option<Arc<Wal>>>,
@@ -72,7 +74,7 @@ pub struct DurableIndex {
     compacting: AtomicBool,
 }
 
-fn wal_path(dir: &Path, gen_no: u64) -> PathBuf {
+pub(crate) fn wal_path(dir: &Path, gen_no: u64) -> PathBuf {
     dir.join(format!("wal-{gen_no:012}.log"))
 }
 
@@ -325,7 +327,7 @@ impl DurableIndex {
 
     fn assemble(index: Index, dir: Option<PathBuf>, mode: Durability, wal: Option<Arc<Wal>>, gen_no: u64) -> Self {
         DurableIndex {
-            cfg: index.config().clone(),
+            epoch: AtomicU64::new(0),
             index: RwLock::new(Arc::new(index)),
             dir,
             mode,
@@ -343,8 +345,42 @@ impl DurableIndex {
         self.index.read().clone()
     }
 
-    pub fn config(&self) -> &Config {
-        &self.cfg
+    pub fn config(&self) -> Config {
+        self.index().config().clone()
+    }
+
+    /// Swaps in another index wholesale (replicas do this after loading a leader snapshot).
+    /// Readers holding the old one finish on it. A BM25 index, if one was enabled, carries over.
+    pub fn replace_index(&self, index: Index) {
+        let _w = self.gate.write();
+        if let Some(field) = self.index().text_field() {
+            index.enable_text_index(&field);
+        }
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+        *self.index.write() = Arc::new(index);
+    }
+
+    /// Replays one log record through the normal mutation path. Failures that replay treats
+    /// as harmless (duplicates, missing ids) are swallowed here too.
+    pub(crate) fn apply_op(&self, op: Op) -> Result<()> {
+        let res = match op {
+            Op::Insert { id, vector, payload } => self.insert(id, &vector, payload),
+            Op::Delete(id) => self.delete(id),
+            Op::Upsert { id, vector, payload } => self.upsert(id, &vector, payload),
+            Op::SetPayload { id, payload } => self.set_payload(id, payload),
+            Op::MergePayload { id, payload } => self.merge_payload(id, payload),
+        };
+        match res {
+            Err(e) if !skippable(&e) => Err(e),
+            _ => Ok(()),
+        }
+    }
+
+    /// Complete records at the front of `buf`, and how many bytes they took.
+    pub(crate) fn parse_records(buf: &[u8]) -> (Vec<Op>, usize) {
+        let mut r = Records { data: buf, pos: 0 };
+        let ops: Vec<Op> = (&mut r).collect();
+        (ops, r.pos)
     }
 
     pub fn len(&self) -> usize {
@@ -567,12 +603,17 @@ impl DurableIndex {
             self.tail.lock().clear();
             self.recording.store(true, Ordering::Release);
         }
+        let epoch = self.epoch.load(Ordering::Acquire);
         let built = self.index().compacted(threads);
 
         let _w = self.gate.write();
         self.recording.store(false, Ordering::Release);
         let tail = std::mem::take(&mut *self.tail.lock());
         let fresh = built?;
+        if self.epoch.load(Ordering::Acquire) != epoch {
+            // the index was replaced while we rebuilt the old one, don't bring it back
+            return Ok(());
+        }
         for op in tail {
             match apply(&fresh, op) {
                 Err(e) if !skippable(&e) => return Err(e),
@@ -600,8 +641,11 @@ impl DurableIndex {
         *self.wal.write() = Some(new_wal);
         *gen_no = next;
         snapshots::prune(dir, 2);
+        // The log the snapshot just superseded stays one more round: a replica that was caught
+        // up on it can finish reading and move to the new one instead of re-downloading.
+        // Recovery ignores it (it only replays logs from the snapshot's generation on).
         for (g, p) in wal_files(dir) {
-            if g < next {
+            if g + 1 < next {
                 let _ = std::fs::remove_file(p);
             }
         }

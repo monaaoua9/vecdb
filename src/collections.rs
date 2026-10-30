@@ -90,6 +90,19 @@ impl Collections {
         self.map.read().get(name).cloned()
     }
 
+    /// Registers an in-memory collection around `index`, or swaps it into the existing one.
+    /// This is how a replica follows the leader's collections.
+    pub fn install(&self, name: &str, index: Index) -> Arc<DurableIndex> {
+        let mut map = self.map.write();
+        if let Some(d) = map.get(name) {
+            d.replace_index(index);
+            return d.clone();
+        }
+        let d = self.with_text(DurableIndex::in_memory(index));
+        map.insert(name.to_owned(), d.clone());
+        d
+    }
+
     pub fn list(&self) -> Vec<(String, Arc<DurableIndex>)> {
         self.map.read().iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }

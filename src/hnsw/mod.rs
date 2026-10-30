@@ -204,20 +204,29 @@ impl Index {
 
     pub fn delete(&self, ext_id: u64) -> Result<()> {
         let _g = self.gate.read();
-        let (id, node) = {
+        let id = {
             let mut ids = self.ids.write();
             let id = *ids.get(&ext_id).ok_or(Error::NotFound(ext_id))?;
-            let node = self.nodes.get(id as usize).ok_or(Error::NotFound(ext_id))?;
+            if self.nodes.get(id as usize).is_none() {
+                return Err(Error::NotFound(ext_id));
+            }
             ids.remove(&ext_id);
-            (id, node)
+            id
         };
         // tombstone only: the node keeps routing queries, it just never shows up in results
+        self.retire(id);
+        Ok(())
+    }
+
+    pub(crate) fn retire(&self, id: u32) {
+        let Some(node) = self.nodes.get(id as usize) else {
+            return;
+        };
         if !node.deleted.swap(true, Ordering::AcqRel) {
             self.pidx.remove(id, &node.payload);
             self.live.fetch_sub(1, Ordering::Relaxed);
             self.tombstones.fetch_add(1, Ordering::Relaxed);
         }
-        Ok(())
     }
 
     pub fn stats(&self) -> Stats {

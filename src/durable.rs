@@ -42,12 +42,14 @@ pub enum Durability {
 enum OpRef<'a> {
     Insert { id: u64, vector: &'a [f32], payload: &'a Payload },
     Delete(u64),
+    Upsert { id: u64, vector: &'a [f32], payload: &'a Payload },
 }
 
 #[derive(Deserialize)]
 enum Op {
     Insert { id: u64, vector: Vec<f32>, payload: Payload },
     Delete(u64),
+    Upsert { id: u64, vector: Vec<f32>, payload: Payload },
 }
 
 pub struct DurableIndex {
@@ -213,6 +215,7 @@ fn replay(index: &Index, path: &Path) -> Result<(usize, u64)> {
         let res = match op {
             Op::Insert { id, vector, payload } => index.insert(id, &vector, payload),
             Op::Delete(id) => index.delete(id),
+            Op::Upsert { id, vector, payload } => index.upsert(id, &vector, payload),
         };
         match res {
             Err(e) if !skippable(&e) => return Err(e),
@@ -326,6 +329,16 @@ impl DurableIndex {
         let _g = self.gate.read();
         let rec = self.dir.is_some().then(|| encode(&OpRef::Insert { id, vector, payload: &payload }));
         self.index.insert(id, vector, payload)?;
+        match rec {
+            Some(r) => self.append(&[r?]),
+            None => Ok(()),
+        }
+    }
+
+    pub fn upsert(&self, id: u64, vector: &[f32], payload: Payload) -> Result<()> {
+        let _g = self.gate.read();
+        let rec = self.dir.is_some().then(|| encode(&OpRef::Upsert { id, vector, payload: &payload }));
+        self.index.upsert(id, vector, payload)?;
         match rec {
             Some(r) => self.append(&[r?]),
             None => Ok(()),

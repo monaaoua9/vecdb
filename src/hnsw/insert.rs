@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::scratch::{Cand, Scratch, scratch};
@@ -12,20 +13,41 @@ impl Index {
         let _g = self.gate.read();
 
         let id = self.reserve(ext_id)?;
+        self.place(id, ext_id, &vec, payload);
+        Ok(())
+    }
+
+    /// Insert, or replace the vector and payload when `ext_id` already exists.
+    /// The new node is fully linked before the id points at it, so `get` never misses;
+    /// the old node is tombstoned (it keeps routing until the next compaction and
+    /// uses one capacity slot). A search racing the swap can see both versions.
+    pub fn upsert(&self, ext_id: u64, vector: &[f32], payload: Payload) -> Result<()> {
+        let vec = self.space.sanitize(vector)?;
+        let _g = self.gate.read();
+
+        let id = self.next_slot(&mut self.ids.write())?;
+        self.place(id, ext_id, &vec, payload);
+        let old = self.ids.write().insert(ext_id, id);
+        if let Some(o) = old {
+            self.retire(o);
+        }
+        Ok(())
+    }
+
+    fn place(&self, id: u32, ext_id: u64, vec: &[f32], payload: Payload) {
         let level = self.random_level();
-        self.store.put(id as usize, &vec);
+        self.store.put(id as usize, vec);
         if let Some(f) = &self.full {
-            f.put(id as usize, &vec);
+            f.put(id as usize, vec);
         }
         self.nodes.set(id as usize, Node::new(ext_id, level, payload, self.cfg.m));
 
-        self.link(id, level, &vec);
+        self.link(id, level, vec);
 
         // only now does the filter planner learn about the node
         let node = self.nodes.get(id as usize).unwrap();
         self.pidx.add(id, &node.payload);
         self.live.fetch_add(1, Ordering::Relaxed);
-        Ok(())
     }
 
     /// Parallel load. Stops at the first error; items inserted before that stay.
@@ -56,12 +78,18 @@ impl Index {
         if ids.contains_key(&ext_id) {
             return Err(Error::DuplicateId(ext_id));
         }
+        let n = self.next_slot(&mut ids)?;
+        ids.insert(ext_id, n);
+        Ok(n)
+    }
+
+    // the id map lock is what serialises slot allocation
+    fn next_slot(&self, _held: &mut HashMap<u64, u32>) -> Result<u32> {
         let n = self.next_id.load(Ordering::Relaxed);
         if n >= self.cfg.max_elements {
             return Err(Error::CapacityExceeded(self.cfg.max_elements));
         }
         self.next_id.store(n + 1, Ordering::Release);
-        ids.insert(ext_id, n as u32);
         Ok(n as u32)
     }
 

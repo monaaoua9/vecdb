@@ -97,3 +97,52 @@ fn compaction_drops_tombstones_and_keeps_data() {
     let f = SearchParams::new(5).filter(Filter::eq("grp", 0));
     assert_eq!(c.search_with(&q, &f).unwrap().len(), 5);
 }
+
+#[test]
+fn upsert_replaces_vector_and_payload() {
+    use vecdb::{Filter, Value};
+    let mut cfg = Config::new(3, Metric::L2);
+    cfg.max_elements = 10;
+    let idx = Index::new(cfg).unwrap();
+
+    let mut p = Payload::new();
+    p.insert("tag".into(), Value::Str("old".into()));
+    idx.upsert(1, &[1.0, 0.0, 0.0], p).unwrap();
+    idx.insert(2, &[0.0, 9.0, 0.0], Payload::new()).unwrap();
+
+    let mut p = Payload::new();
+    p.insert("tag".into(), Value::Str("new".into()));
+    idx.upsert(1, &[0.0, 0.0, 5.0], p).unwrap();
+
+    assert_eq!(idx.len(), 2);
+    let r = idx.get(1).unwrap();
+    assert_eq!(r.vector, vec![0.0, 0.0, 5.0]);
+    assert_eq!(r.payload["tag"], Value::Str("new".into()));
+
+    let hits = idx.search(&[0.0, 0.0, 5.0], 5).unwrap();
+    assert_eq!(hits.iter().filter(|h| h.id == 1).count(), 1);
+    assert_eq!(hits[0].id, 1);
+
+    // the old payload must be gone from the filter index too
+    let by = |t: &str| SearchParams::new(5).filter(Filter::eq("tag", t));
+    assert!(idx.search_with(&[1.0, 0.0, 0.0], &by("old")).unwrap().is_empty());
+    assert_eq!(idx.search_with(&[1.0, 0.0, 0.0], &by("new")).unwrap().len(), 1);
+}
+
+#[test]
+fn upsert_of_missing_id_inserts() {
+    let idx = small();
+    idx.upsert(7, &[1.0, 1.0, 1.0], Payload::new()).unwrap();
+    assert!(idx.contains(7));
+    assert_eq!(idx.len(), 1);
+}
+
+#[test]
+fn upsert_uses_a_slot_each_time() {
+    let idx = small();
+    for i in 0..4 {
+        idx.upsert(1, &[i as f32, 0.0, 0.0], Payload::new()).unwrap();
+    }
+    assert!(matches!(idx.upsert(1, &[9.0, 0.0, 0.0], Payload::new()), Err(Error::CapacityExceeded(4))));
+    assert_eq!(idx.get(1).unwrap().vector, vec![3.0, 0.0, 0.0]);
+}

@@ -260,3 +260,18 @@ fn pq_index_recovers_from_wal_and_snapshot() {
     assert!(d.contains(599));
     assert_eq!(first.len(), 3);
 }
+
+#[test]
+fn upsert_survives_crash() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let d = DurableIndex::open(dir.path(), cfg(), Durability::Flush).unwrap();
+        d.insert(1, &[1.0; 12], Payload::new()).unwrap();
+        d.upsert(1, &[2.0; 12], Payload::new()).unwrap();
+        d.upsert(2, &[3.0; 12], Payload::new()).unwrap();
+    }
+    let d = DurableIndex::open(dir.path(), cfg(), Durability::Flush).unwrap();
+    assert_eq!(d.len(), 2);
+    assert_eq!(d.get(1).unwrap().vector, vec![2.0; 12]);
+    assert_eq!(d.get(2).unwrap().vector, vec![3.0; 12]);
+}

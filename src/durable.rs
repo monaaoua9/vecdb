@@ -11,10 +11,9 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use parking_lot::{Condvar, Mutex, MutexGuard, RwLock};
 use serde::{Deserialize, Serialize};
@@ -22,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::filter::Payload;
-use crate::hnsw::{Index, Item};
+use crate::hnsw::{Hit, Index, Item, Record, SearchParams, Stats};
 use crate::pq::Codebook;
 use crate::quant::Quantization;
 use crate::snapshots;
@@ -47,7 +46,7 @@ enum OpRef<'a> {
     MergePayload { id: u64, payload: &'a Payload },
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 enum Op {
     Insert { id: u64, vector: Vec<f32>, payload: Payload },
     Delete(u64),
@@ -57,20 +56,19 @@ enum Op {
 }
 
 pub struct DurableIndex {
-    index: Index,
+    // swapped wholesale by online compaction; readers clone the Arc and keep using the old one
+    index: RwLock<Arc<Index>>,
+    cfg: Config,
     dir: Option<PathBuf>,
     mode: Durability,
     wal: RwLock<Option<Arc<Wal>>>,
     generation: Mutex<u64>,
-    // mutations hold it shared across apply+log, checkpoint holds it exclusive
+    // mutations hold it shared across apply+log, checkpoint and the compaction swap hold it exclusive
     gate: RwLock<()>,
-}
-
-impl Deref for DurableIndex {
-    type Target = Index;
-    fn deref(&self) -> &Index {
-        &self.index
-    }
+    // ops applied while a compaction is rebuilding, replayed onto the new index before the swap
+    tail: Mutex<Vec<Op>>,
+    recording: AtomicBool,
+    compacting: AtomicBool,
 }
 
 fn wal_path(dir: &Path, gen_no: u64) -> PathBuf {
@@ -200,6 +198,16 @@ fn skippable(e: &Error) -> bool {
     )
 }
 
+fn apply(index: &Index, op: Op) -> Result<()> {
+    match op {
+        Op::Insert { id, vector, payload } => index.insert(id, &vector, payload),
+        Op::Delete(id) => index.delete(id),
+        Op::Upsert { id, vector, payload } => index.upsert(id, &vector, payload),
+        Op::SetPayload { id, payload } => index.set_payload(id, payload),
+        Op::MergePayload { id, payload } => index.merge_payload(id, payload),
+    }
+}
+
 /// Applies every intact record, returns (records applied, bytes that were valid).
 fn replay(index: &Index, path: &Path) -> Result<(usize, u64)> {
     let data = std::fs::read(path)?;
@@ -216,14 +224,7 @@ fn replay(index: &Index, path: &Path) -> Result<(usize, u64)> {
         let Ok(op) = postcard::from_bytes::<Op>(body) else {
             break;
         };
-        let res = match op {
-            Op::Insert { id, vector, payload } => index.insert(id, &vector, payload),
-            Op::Delete(id) => index.delete(id),
-            Op::Upsert { id, vector, payload } => index.upsert(id, &vector, payload),
-            Op::SetPayload { id, payload } => index.set_payload(id, payload),
-            Op::MergePayload { id, payload } => index.merge_payload(id, payload),
-        };
-        match res {
+        match apply(index, op) {
             Err(e) if !skippable(&e) => return Err(e),
             _ => applied += 1,
         }
@@ -235,14 +236,7 @@ fn replay(index: &Index, path: &Path) -> Result<(usize, u64)> {
 impl DurableIndex {
     /// no files, no log: a plain index behind the same API
     pub fn in_memory(index: Index) -> Self {
-        DurableIndex {
-            index,
-            dir: None,
-            mode: Durability::Flush,
-            wal: RwLock::new(None),
-            generation: Mutex::new(0),
-            gate: RwLock::new(()),
-        }
+        DurableIndex::assemble(index, None, Durability::Flush, None, 0)
     }
 
     /// First step for a PQ index: trains the codebook and stores it in `dir`, so that
@@ -303,14 +297,78 @@ impl DurableIndex {
         }
 
         let out = Arc::new(Wal::open(&wal_path(dir, newest_wal))?);
-        Ok(DurableIndex {
-            index,
-            dir: Some(dir.to_path_buf()),
+        Ok(DurableIndex::assemble(index, Some(dir.to_path_buf()), mode, Some(out), snap_gen))
+    }
+
+    fn assemble(index: Index, dir: Option<PathBuf>, mode: Durability, wal: Option<Arc<Wal>>, gen_no: u64) -> Self {
+        DurableIndex {
+            cfg: index.config().clone(),
+            index: RwLock::new(Arc::new(index)),
+            dir,
             mode,
-            wal: RwLock::new(Some(out)),
-            generation: Mutex::new(snap_gen),
+            wal: RwLock::new(wal),
+            generation: Mutex::new(gen_no),
             gate: RwLock::new(()),
-        })
+            tail: Mutex::new(Vec::new()),
+            recording: AtomicBool::new(false),
+            compacting: AtomicBool::new(false),
+        }
+    }
+
+    /// The index as it is right now. A compaction swap doesn't affect handles already taken.
+    pub fn index(&self) -> Arc<Index> {
+        self.index.read().clone()
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.cfg
+    }
+
+    pub fn len(&self) -> usize {
+        self.index().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.index().is_empty()
+    }
+
+    pub fn contains(&self, id: u64) -> bool {
+        self.index().contains(id)
+    }
+
+    pub fn get(&self, id: u64) -> Option<Record> {
+        self.index().get(id)
+    }
+
+    pub fn search(&self, query: &[f32], k: usize) -> Result<Vec<Hit>> {
+        self.index().search(query, k)
+    }
+
+    pub fn search_with(&self, query: &[f32], p: &SearchParams) -> Result<Vec<Hit>> {
+        self.index().search_with(query, p)
+    }
+
+    pub fn exact_search(&self, query: &[f32], k: usize) -> Result<Vec<Hit>> {
+        self.index().exact_search(query, k)
+    }
+
+    pub fn stats(&self) -> Stats {
+        self.index().stats()
+    }
+
+    pub fn tombstone_ratio(&self) -> f64 {
+        self.index().tombstone_ratio()
+    }
+
+    // the flag only flips under the exclusive gate, so it is stable for a whole mutation
+    fn capture<T>(&self, f: impl FnOnce() -> T) -> Option<T> {
+        self.recording.load(Ordering::Acquire).then(f)
+    }
+
+    fn push<I: IntoIterator<Item = Op>>(&self, ops: Option<I>) {
+        if let Some(ops) = ops {
+            self.tail.lock().extend(ops);
+        }
     }
 
     pub fn is_durable(&self) -> bool {
@@ -334,7 +392,9 @@ impl DurableIndex {
     pub fn insert(&self, id: u64, vector: &[f32], payload: Payload) -> Result<()> {
         let _g = self.gate.read();
         let rec = self.dir.is_some().then(|| encode(&OpRef::Insert { id, vector, payload: &payload }));
-        self.index.insert(id, vector, payload)?;
+        let op = self.capture(|| Op::Insert { id, vector: vector.to_vec(), payload: payload.clone() });
+        self.index().insert(id, vector, payload)?;
+        self.push(op.map(|o| [o]));
         match rec {
             Some(r) => self.append(&[r?]),
             None => Ok(()),
@@ -344,7 +404,9 @@ impl DurableIndex {
     pub fn upsert(&self, id: u64, vector: &[f32], payload: Payload) -> Result<()> {
         let _g = self.gate.read();
         let rec = self.dir.is_some().then(|| encode(&OpRef::Upsert { id, vector, payload: &payload }));
-        self.index.upsert(id, vector, payload)?;
+        let op = self.capture(|| Op::Upsert { id, vector: vector.to_vec(), payload: payload.clone() });
+        self.index().upsert(id, vector, payload)?;
+        self.push(op.map(|o| [o]));
         match rec {
             Some(r) => self.append(&[r?]),
             None => Ok(()),
@@ -354,7 +416,9 @@ impl DurableIndex {
     pub fn set_payload(&self, id: u64, payload: Payload) -> Result<()> {
         let _g = self.gate.read();
         let rec = self.dir.is_some().then(|| encode(&OpRef::SetPayload { id, payload: &payload }));
-        self.index.set_payload(id, payload)?;
+        let op = self.capture(|| Op::SetPayload { id, payload: payload.clone() });
+        self.index().set_payload(id, payload)?;
+        self.push(op.map(|o| [o]));
         match rec {
             Some(r) => self.append(&[r?]),
             None => Ok(()),
@@ -364,7 +428,9 @@ impl DurableIndex {
     pub fn merge_payload(&self, id: u64, payload: Payload) -> Result<()> {
         let _g = self.gate.read();
         let rec = self.dir.is_some().then(|| encode(&OpRef::MergePayload { id, payload: &payload }));
-        self.index.merge_payload(id, payload)?;
+        let op = self.capture(|| Op::MergePayload { id, payload: payload.clone() });
+        self.index().merge_payload(id, payload)?;
+        self.push(op.map(|o| [o]));
         match rec {
             Some(r) => self.append(&[r?]),
             None => Ok(()),
@@ -380,24 +446,69 @@ impl DurableIndex {
                 .collect::<Result<Vec<_>>>()?;
             self.append(&recs)?;
         }
-        self.index.insert_bulk(items, threads)
+        let ops = self.capture(|| {
+            items
+                .iter()
+                .map(|it| Op::Insert { id: it.id, vector: it.vector.clone(), payload: it.payload.clone() })
+                .collect::<Vec<_>>()
+        });
+        self.index().insert_bulk(items, threads)?;
+        self.push(ops);
+        Ok(())
     }
 
     pub fn delete(&self, id: u64) -> Result<()> {
         let _g = self.gate.read();
-        self.index.delete(id)?;
+        let op = self.capture(|| Op::Delete(id));
+        self.index().delete(id)?;
+        self.push(op.map(|o| [o]));
         if self.dir.is_some() {
             self.append(&[encode(&OpRef::Delete(id))?])?;
         }
         Ok(())
     }
 
-    /// Rebuilds the graph without tombstones and persists the result as a new
-    /// snapshot generation. Needs exclusive access, so run it at start-up,
-    /// before the index is shared.
+    /// Compacts, then persists the result as a new snapshot generation.
     pub fn compact(&mut self, threads: usize) -> Result<()> {
-        self.index = self.index.compacted(threads)?;
+        self.compact_online(threads)?;
         self.checkpoint()?;
+        Ok(())
+    }
+
+    /// Rebuilds the graph without tombstones while reads and writes keep going.
+    /// Writes that land during the rebuild are replayed onto the new index just before
+    /// the swap; only that replay holds writers up. The swap is in memory only, the
+    /// compacted state reaches disk with the next checkpoint (until then recovery
+    /// replays the log onto the old snapshot, which gives the same data).
+    /// Returns false if another compaction is already running.
+    pub fn compact_online(&self, threads: usize) -> Result<bool> {
+        if self.compacting.swap(true, Ordering::AcqRel) {
+            return Ok(false);
+        }
+        let res = self.rebuild_and_swap(threads);
+        self.compacting.store(false, Ordering::Release);
+        res.map(|_| true)
+    }
+
+    fn rebuild_and_swap(&self, threads: usize) -> Result<()> {
+        {
+            let _w = self.gate.write();
+            self.tail.lock().clear();
+            self.recording.store(true, Ordering::Release);
+        }
+        let built = self.index().compacted(threads);
+
+        let _w = self.gate.write();
+        self.recording.store(false, Ordering::Release);
+        let tail = std::mem::take(&mut *self.tail.lock());
+        let fresh = built?;
+        for op in tail {
+            match apply(&fresh, op) {
+                Err(e) if !skippable(&e) => return Err(e),
+                _ => {}
+            }
+        }
+        *self.index.write() = Arc::new(fresh);
         Ok(())
     }
 
@@ -413,7 +524,7 @@ impl DurableIndex {
 
         let new_wal = Arc::new(Wal::open(&wal_path(dir, next))?);
         let path = snapshots::path_for(dir, next);
-        self.index.save(&path)?;
+        self.index().save(&path)?;
 
         *self.wal.write() = Some(new_wal);
         *gen_no = next;
@@ -423,6 +534,6 @@ impl DurableIndex {
                 let _ = std::fs::remove_file(p);
             }
         }
-        Ok(Some((path, self.index.len() as u64)))
+        Ok(Some((path, self.len() as u64)))
     }
 }

@@ -298,3 +298,55 @@ fn payload_edits_survive_crash() {
     assert_eq!(p["c"], Value::Int(3));
     assert_eq!(p["d"], Value::Int(4));
 }
+
+#[test]
+fn online_compaction_keeps_writes_made_during_the_rebuild() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let dir = tempfile::tempdir().unwrap();
+    let data = clustered(1200, 12, 5);
+    let d = DurableIndex::open(dir.path(), cfg(), Durability::Flush).unwrap();
+    for (i, v) in data[..800].iter().enumerate() {
+        d.insert(i as u64, v, Payload::new()).unwrap();
+    }
+    for i in 0..500u64 {
+        d.delete(i).unwrap();
+    }
+
+    let done = AtomicBool::new(false);
+    std::thread::scope(|sc| {
+        let writer = sc.spawn(|| {
+            // keeps mutating until the compaction thread says it is over
+            let mut next = 800usize;
+            while !done.load(Ordering::Acquire) && next < 1200 {
+                d.insert(next as u64, &data[next], Payload::new()).unwrap();
+                if next % 3 == 0 {
+                    d.delete((next - 300) as u64).unwrap();
+                }
+                next += 1;
+            }
+            next
+        });
+        assert!(d.compact_online(2).unwrap());
+        done.store(true, Ordering::Release);
+        let reached = writer.join().unwrap();
+        // finish the remaining inserts after the swap so the expectation below is fixed
+        for next in reached..1200 {
+            d.insert(next as u64, &data[next], Payload::new()).unwrap();
+            if next % 3 == 0 {
+                d.delete((next - 300) as u64).unwrap();
+            }
+        }
+    });
+
+    let want: Vec<u64> = (500..1200u64).filter(|&i| !(i < 900 && i % 3 == 0)).collect();
+    assert_eq!(d.len(), want.len());
+    for &i in &want {
+        assert!(d.contains(i), "lost {i}");
+    }
+    assert_eq!(d.search(&data[1100], 1).unwrap()[0].id, 1100);
+
+    // and the log still reproduces the same state on top of the old snapshot
+    drop(d);
+    let d = DurableIndex::open(dir.path(), cfg(), Durability::Flush).unwrap();
+    assert_eq!(d.len(), want.len());
+}

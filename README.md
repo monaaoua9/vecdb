@@ -31,7 +31,7 @@ let index = Index::open("snapshot-000000000001.vdb")?; // vectors are mmap'd
 | **Index** | HNSW with the paper's diversity heuristic for neighbour selection, seeded level generation, tombstone deletes with start-up compaction |
 | **Concurrency** | inserts and searches run in parallel; per-node per-layer `RwLock`s, write-once node/vector slots, no global lock on the query path |
 | **SIMD** | `dot`, `l2_sq` and a `u8×f32` dot for AVX-512F, AVX2+FMA, NEON, plus a scalar reference; chosen at run time |
-| **Quantization** | SQ8, per-vector min/scale, asymmetric distance (query stays `f32`, vectors are never decoded) — 72.7% smaller at 128 dims, 74.6% at 768 |
+| **Quantization** | 1-bit binary (32x smaller, popcount Hamming, optional f32 rerank), SQ8, per-vector min/scale, asymmetric distance (query stays `f32`, vectors are never decoded) — 72.7% smaller at 128 dims, 74.6% at 768 |
 | **Storage** | single-file snapshot, vectors served from `mmap`, CRC-checked header and metadata, atomic write-then-rename |
 | **Filtering** | `Eq`, `AnyOf`, `Range`, `And`, `Or`, `Not` over typed payloads; roaring-bitmap inverted index; planner picks exact pre-filter scan or filtered graph walk, or force either with `FilterStrategy` |
 | **Durability** | `DurableIndex`: snapshot generations + write-ahead log (CRC per record, torn tails truncated, idempotent replay), optional fsync with group commit (concurrent writers share one fsync) |
@@ -165,6 +165,15 @@ while the traversal only touches 32-byte codes. Recall is a bit below f32 at the
 (0.949 vs 0.963) because the graph is built and walked on quantised distances. The snapshot
 is 614 MB since it holds both the codes and the f32 section; what shrinks is the memory the
 search keeps hot (codes plus graph), not the file. The build is slower (331 s vs 190 s for SQ8).
+
+Binary quantization (`Quantization::Binary`, `--quantization binary`) keeps one sign bit per
+component: 32x smaller than f32 (768 dims = 96 bytes) and distance is a popcount over XOR, so
+the graph walk touches very little memory. Plain Hamming ordering is coarse (recall@10 about
+0.40 against exact f32 at ef=128 on the test data, 128 dims, cosine), so use it with
+`Config::rerank` / `--rerank`: the beam is re-scored with full-precision vectors and recall
+goes back to 0.99 on the same data. Without rerank the reported `distance` is the number of
+differing bits, for every metric. It assumes roughly zero-centred components (most embedding
+models are); all-positive data collapses to the same code.
 
 Where the time goes (f32, ef=64, about 1 100 distance evaluations per query):
 distance arithmetic is about 11% of the cycles; the rest is mostly fetching neighbour

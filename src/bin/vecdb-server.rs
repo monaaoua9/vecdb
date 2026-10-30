@@ -18,6 +18,8 @@ enum MetricArg {
 enum QuantArg {
     None,
     Sq8,
+    /// 1 bit per component, pair it with --rerank
+    Binary,
     /// needs a codebook in --data-dir, see DurableIndex::train_pq
     Pq,
 }
@@ -84,6 +86,7 @@ fn build_config(a: &Args) -> Config {
     cfg.quantization = match a.quantization {
         QuantArg::None => Quantization::None,
         QuantArg::Sq8 => Quantization::Sq8,
+        QuantArg::Binary => Quantization::Binary,
         QuantArg::Pq => Quantization::Pq { m: a.pq_m },
     };
     cfg.rerank = a.rerank;

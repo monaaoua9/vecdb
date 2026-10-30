@@ -44,3 +44,15 @@ fn empty_slices() {
         assert_eq!((k.dot_u8)(&[], &[]), 0.0);
     }
 }
+
+#[test]
+fn hamming_matches_scalar() {
+    let mut r = Rng::new(11);
+    for words in (1..=40).chain([48, 96]) {
+        let a: Vec<u32> = (0..words).map(|_| r.next_u64() as u32).collect();
+        let b: Vec<u32> = (0..words).map(|_| r.next_u64() as u32).collect();
+        let want: u32 = a.iter().zip(&b).map(|(x, y)| (x ^ y).count_ones()).sum();
+        assert_eq!(vecdb::distance::hamming(&a, &b), want, "words={words}");
+        assert_eq!(vecdb::distance::scalar::hamming(&a, &b), want);
+    }
+}

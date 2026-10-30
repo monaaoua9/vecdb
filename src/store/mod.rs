@@ -21,6 +21,7 @@ pub enum VectorRef<'a> {
     F32(&'a [f32]),
     Sq8 { codes: &'a [u8], min: f32, scale: f32, norm_sq: f32 },
     Pq { codes: &'a [u8], book: &'a Codebook },
+    Binary { bits: &'a [u32] },
 }
 
 struct Slab {
@@ -130,6 +131,7 @@ impl VectorStore {
                 let bytes = bytemuck::cast_slice_mut::<u32, u8>(rec);
                 self.book.as_ref().unwrap().encode(vec, &mut bytes[..m as usize]);
             }
+            Quantization::Binary => quant::binarize(vec, rec),
         }
         slab.state[slot].store(READY, Ordering::Release);
         true
@@ -166,6 +168,7 @@ impl VectorStore {
                 codes: &bytemuck::cast_slice(w)[..m as usize],
                 book: self.book.as_deref().unwrap(),
             },
+            Quantization::Binary => VectorRef::Binary { bits: w },
         })
     }
 
@@ -182,6 +185,11 @@ impl VectorStore {
             VectorRef::Pq { codes, book } => {
                 buf.resize(self.dim, 0.0);
                 book.decode(codes, buf);
+                Some(&buf[..])
+            }
+            VectorRef::Binary { bits } => {
+                buf.resize(self.dim, 0.0);
+                quant::unbinarize(bits, buf);
                 Some(&buf[..])
             }
         }
@@ -240,6 +248,16 @@ mod tests {
         for (a, b) in v.iter().zip(back) {
             assert!((a - b).abs() < 0.01);
         }
+    }
+
+    #[test]
+    fn put_get_binary() {
+        let s = VectorStore::new(40, Quantization::Binary, 10, None, None);
+        let v: Vec<f32> = (0..40).map(|i| if i % 2 == 0 { 0.3 } else { -0.3 }).collect();
+        assert!(s.put(2, &v));
+        let mut buf = Vec::new();
+        let back = s.decode(2, &mut buf).unwrap();
+        assert!(v.iter().zip(back).all(|(a, b)| a.signum() == *b));
     }
 
     #[test]

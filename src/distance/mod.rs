@@ -62,6 +62,24 @@ impl Kernels {
     }
 }
 
+type HammingFn = fn(&[u32], &[u32]) -> u32;
+
+/// differing bits between two packed vectors
+#[inline]
+pub fn hamming(a: &[u32], b: &[u32]) -> u32 {
+    static F: OnceLock<HammingFn> = OnceLock::new();
+    F.get_or_init(pick_hamming)(a, b)
+}
+
+fn pick_hamming() -> HammingFn {
+    #[cfg(target_arch = "x86_64")]
+    if kernels().name != "scalar" && is_x86_feature_detected!("popcnt") {
+        return x86::hamming_popcnt;
+    }
+    // aarch64 lowers count_ones to NEON cnt on its own
+    scalar::hamming
+}
+
 pub fn kernels() -> &'static Kernels {
     static K: OnceLock<Kernels> = OnceLock::new();
     K.get_or_init(Kernels::detect)
@@ -74,6 +92,8 @@ pub struct PreparedQuery<'a> {
     // pq only: per-query partial distances, built on the first comparison
     adc: OnceCell<Vec<f32>>,
     use_adc: bool,
+    // binary only: the query's own sign bits
+    bits: Vec<u32>,
 }
 
 thread_local! {
@@ -113,9 +133,10 @@ impl Space {
         let (sum, norm_sq) = match self.quant {
             Quantization::None => (0.0, 0.0),
             Quantization::Sq8 => (v.iter().sum(), (self.k.dot)(v, v)),
-            Quantization::Pq { .. } => (0.0, 0.0),
+            Quantization::Pq { .. } | Quantization::Binary => (0.0, 0.0),
         };
-        PreparedQuery { v: Cow::Borrowed(v), sum, norm_sq, adc: OnceCell::new(), use_adc: false }
+        let bits = self.query_bits(v);
+        PreparedQuery { v: Cow::Borrowed(v), sum, norm_sq, adc: OnceCell::new(), use_adc: false, bits }
     }
 
     /// like `prepare`, but for a vector that is compared against many stored ones:
@@ -132,10 +153,20 @@ impl Space {
         let (sum, norm_sq) = match self.quant {
             Quantization::None => (0.0, 0.0),
             Quantization::Sq8 => (v.iter().sum(), (self.k.dot)(&v, &v)),
-            Quantization::Pq { .. } => (0.0, 0.0),
+            Quantization::Pq { .. } | Quantization::Binary => (0.0, 0.0),
         };
         let use_adc = matches!(self.quant, Quantization::Pq { .. });
-        Ok(PreparedQuery { v: Cow::Owned(v), sum, norm_sq, adc: OnceCell::new(), use_adc })
+        let bits = self.query_bits(&v);
+        Ok(PreparedQuery { v: Cow::Owned(v), sum, norm_sq, adc: OnceCell::new(), use_adc, bits })
+    }
+
+    fn query_bits(&self, v: &[f32]) -> Vec<u32> {
+        if self.quant != Quantization::Binary {
+            return Vec::new();
+        }
+        let mut bits = vec![0u32; self.quant.stride_words(self.dim)];
+        crate::quant::binarize(v, &mut bits);
+        bits
     }
 
     pub fn sanitize(&self, v: &[f32]) -> Result<Vec<f32>> {
@@ -174,6 +205,8 @@ impl Space {
                     Metric::Cosine => 1.0 - dot,
                 }
             }
+            // same number whatever the metric: how many sign bits differ
+            VectorRef::Binary { bits } => hamming(&q.bits, bits) as f32,
             VectorRef::Pq { codes, book } => {
                 if q.use_adc {
                     let t = q.adc.get_or_init(|| book.adc_table(&q.v, self.metric));

@@ -47,3 +47,7 @@ pub fn dot_u8(q: &[f32], codes: &[u8]) -> f32 {
     }
     s
 }
+
+pub fn hamming(a: &[u32], b: &[u32]) -> u32 {
+    a.iter().zip(b).map(|(x, y)| (x ^ y).count_ones()).sum()
+}

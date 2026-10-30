@@ -18,6 +18,16 @@ pub(super) fn avx512() -> Option<Kernels> {
     }
 }
 
+pub(super) fn hamming_popcnt(a: &[u32], b: &[u32]) -> u32 {
+    assert_eq!(a.len(), b.len());
+    unsafe { hamming_popcnt_impl(a, b) }
+}
+
+#[target_feature(enable = "popcnt")]
+fn hamming_popcnt_impl(a: &[u32], b: &[u32]) -> u32 {
+    a.iter().zip(b).map(|(x, y)| (x ^ y).count_ones()).sum()
+}
+
 // The wrappers below are only reachable through the tables built above,
 // which check CPU support first.
 

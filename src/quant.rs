@@ -9,6 +9,9 @@ pub enum Quantization {
     Pq {
         m: u16,
     },
+    /// one bit per component (its sign), distance is the Hamming distance. 32x smaller than
+    /// f32; recall depends on `Config::rerank` and on the data being roughly zero-centred
+    Binary,
 }
 
 /// min, scale, |decoded|^2 stored after the code bytes
@@ -21,6 +24,7 @@ impl Quantization {
             Quantization::None => dim,
             Quantization::Sq8 => code_words(dim) + PARAM_WORDS,
             Quantization::Pq { m } => (m as usize).div_ceil(4),
+            Quantization::Binary => dim.div_ceil(32),
         }
     }
 
@@ -31,6 +35,23 @@ impl Quantization {
 
 pub fn code_words(dim: usize) -> usize {
     dim.div_ceil(4)
+}
+
+/// sets bit i when `v[i] > 0`; `out` must be `dim.div_ceil(32)` words, the padding bits stay zero
+pub fn binarize(v: &[f32], out: &mut [u32]) {
+    out.fill(0);
+    for (i, &x) in v.iter().enumerate() {
+        if x > 0.0 {
+            out[i / 32] |= 1 << (i % 32);
+        }
+    }
+}
+
+/// bits back to +1 / -1 components
+pub fn unbinarize(bits: &[u32], out: &mut [f32]) {
+    for (i, o) in out.iter_mut().enumerate() {
+        *o = if bits[i / 32] >> (i % 32) & 1 == 1 { 1.0 } else { -1.0 };
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -91,6 +112,21 @@ mod tests {
         let mut back = [0.0; 7];
         decode(&codes, &p, &mut back);
         assert!(back.iter().all(|&x| x == 0.5));
+    }
+
+    #[test]
+    fn binary_roundtrip_keeps_signs() {
+        let v: Vec<f32> = (0..70).map(|i| if i % 3 == 0 { -0.5 } else { 0.25 }).collect();
+        let mut bits = vec![0u32; Quantization::Binary.stride_words(70)];
+        assert_eq!(bits.len(), 3);
+        binarize(&v, &mut bits);
+        let mut back = vec![0.0; 70];
+        unbinarize(&bits, &mut back);
+        for (a, b) in v.iter().zip(&back) {
+            assert_eq!(a.signum(), *b);
+        }
+        // padding must stay clear or hamming distances would drift
+        assert_eq!(bits[2] >> 6, 0);
     }
 
     #[test]

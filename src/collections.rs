@@ -12,11 +12,11 @@ use crate::quant::Quantization;
 
 pub const DEFAULT: &str = "default";
 
-const SUBDIR: &str = "collections";
-const CONFIG_FILE: &str = "collection.cfg";
+pub(crate) const SUBDIR: &str = "collections";
+pub(crate) const CONFIG_FILE: &str = "collection.cfg";
 // dropping while a request still maps the snapshot can't delete the files on Windows,
 // so the marker is what keeps the collection dead until the next start-up cleans it
-const DROPPED: &str = "dropped";
+pub(crate) const DROPPED: &str = "dropped";
 
 /// Named indexes behind one server. "default" is whatever index the process was started
 /// with (so a single-index data directory keeps its old layout); the others live in

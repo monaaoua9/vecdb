@@ -13,7 +13,7 @@ impl From<Error> for Status {
             Error::DimensionMismatch { .. } | Error::InvalidVector(_) => Status::invalid_argument(msg),
             Error::DuplicateId(_) | Error::CollectionExists(_) => Status::already_exists(msg),
             Error::NotFound(_) | Error::CollectionNotFound(_) => Status::not_found(msg),
-            Error::InvalidName(_) => Status::invalid_argument(msg),
+            Error::InvalidName(_) | Error::BadInput(_) => Status::invalid_argument(msg),
             Error::CapacityExceeded(_) => Status::resource_exhausted(msg),
             Error::InvalidConfig(_) => Status::failed_precondition(msg),
             Error::Corrupt(_) | Error::Io(_) | Error::Codec(_) => Status::internal(msg),

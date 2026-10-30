@@ -27,6 +27,9 @@ pub enum Error {
     #[error("invalid collection name: {0}")]
     InvalidName(String),
 
+    #[error("bad input: {0}")]
+    BadInput(String),
+
     #[error("index is full ({0} elements)")]
     CapacityExceeded(usize),
 

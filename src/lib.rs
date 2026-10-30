@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod collections;
 pub mod config;
 pub mod distance;

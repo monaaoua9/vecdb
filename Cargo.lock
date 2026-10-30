@@ -1749,6 +1749,7 @@ dependencies = [
  "prost",
  "roaring",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
  "tokio",

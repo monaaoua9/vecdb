@@ -76,7 +76,7 @@ fn wal_path(dir: &Path, gen_no: u64) -> PathBuf {
     dir.join(format!("wal-{gen_no:012}.log"))
 }
 
-fn wal_files(dir: &Path) -> Vec<(u64, PathBuf)> {
+pub(crate) fn wal_files(dir: &Path) -> Vec<(u64, PathBuf)> {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return vec![];
     };
@@ -209,29 +209,51 @@ fn apply(index: &Index, op: Op) -> Result<()> {
     }
 }
 
+/// Walks the intact records of a log image; stops at the first torn or damaged one.
+struct Records<'a> {
+    data: &'a [u8],
+    pos: usize,
+}
+
+impl Iterator for Records<'_> {
+    type Item = Op;
+
+    fn next(&mut self) -> Option<Op> {
+        let (d, pos) = (self.data, self.pos);
+        if pos + 8 > d.len() {
+            return None;
+        }
+        let n = u32::from_le_bytes(d[pos..pos + 4].try_into().unwrap()) as usize;
+        let crc = u32::from_le_bytes(d[pos + 4..pos + 8].try_into().unwrap());
+        let body = d.get(pos + 8..pos + 8 + n)?;
+        if crc32fast::hash(body) != crc {
+            return None;
+        }
+        let op = postcard::from_bytes::<Op>(body).ok()?;
+        self.pos = pos + 8 + n;
+        Some(op)
+    }
+}
+
+/// (intact records, bytes they cover), without applying anything
+pub(crate) fn scan_wal(data: &[u8]) -> (usize, u64) {
+    let mut r = Records { data, pos: 0 };
+    let n = (&mut r).count();
+    (n, r.pos as u64)
+}
+
 /// Applies every intact record, returns (records applied, bytes that were valid).
 fn replay(index: &Index, path: &Path) -> Result<(usize, u64)> {
     let data = std::fs::read(path)?;
-    let (mut pos, mut applied) = (0usize, 0usize);
-    while pos + 8 <= data.len() {
-        let n = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
-        let crc = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().unwrap());
-        let Some(body) = data.get(pos + 8..pos + 8 + n) else {
-            break;
-        };
-        if crc32fast::hash(body) != crc {
-            break;
-        }
-        let Ok(op) = postcard::from_bytes::<Op>(body) else {
-            break;
-        };
+    let mut recs = Records { data: &data, pos: 0 };
+    let mut applied = 0;
+    for op in &mut recs {
         match apply(index, op) {
             Err(e) if !skippable(&e) => return Err(e),
             _ => applied += 1,
         }
-        pos += 8 + n;
     }
-    Ok((applied, pos as u64))
+    Ok((applied, recs.pos as u64))
 }
 
 impl DurableIndex {
